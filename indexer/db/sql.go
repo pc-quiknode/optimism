@@ -122,6 +122,16 @@ CREATE TABLE IF NOT EXISTS airdrops (
 )
 `
 
+const updateWithdrawalsTable = `
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS br_withdrawal_hash VARCHAR NULL;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS br_withdrawal_proven_tx_hash VARCHAR NULL;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS br_withdrawal_proven_log_index INTEGER NULL;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS br_withdrawal_finalized_tx_hash VARCHAR NULL;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS br_withdrawal_finalized_log_index INTEGER NULL;
+ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS br_withdrawal_finalized_success BOOLEAN NULL;
+CREATE INDEX IF NOT EXISTS withdrawals_br_withdrawal_hash ON withdrawals(br_withdrawal_hash);
+`
+
 var schema = []string{
 	createL1BlocksTable,
 	createL2BlocksTable,
@@ -134,4 +144,5 @@ var schema = []string{
 	createWithdrawalsTable,
 	createL1L2NumberIndex,
 	createAirdropsTable,
+	updateWithdrawalsTable,
 }

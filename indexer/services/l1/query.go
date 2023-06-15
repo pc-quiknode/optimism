@@ -3,43 +3,12 @@ package l1
 import (
 	"context"
 
-	"github.com/ethereum-optimism/optimism/indexer/bindings/l1erc20"
-	"github.com/ethereum/go-ethereum/ethclient"
-
-	"github.com/ethereum-optimism/optimism/indexer/bindings/scc"
+	"github.com/ethereum-optimism/optimism/indexer/bindings/legacy/scc"
 	"github.com/ethereum-optimism/optimism/indexer/db"
 	"github.com/ethereum-optimism/optimism/indexer/services/l1/bridge"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 )
-
-func QueryERC20(address common.Address, client *ethclient.Client) (*db.Token, error) {
-	contract, err := l1erc20.NewL1ERC20(address, client)
-	if err != nil {
-		return nil, err
-	}
-
-	name, err := contract.Name(&bind.CallOpts{})
-	if err != nil {
-		return nil, err
-	}
-
-	symbol, err := contract.Symbol(&bind.CallOpts{})
-	if err != nil {
-		return nil, err
-	}
-
-	decimals, err := contract.Decimals(&bind.CallOpts{})
-	if err != nil {
-		return nil, err
-	}
-
-	return &db.Token{
-		Name:     name,
-		Symbol:   symbol,
-		Decimals: decimals,
-	}, nil
-}
 
 func QueryStateBatches(filterer *scc.StateCommitmentChainFilterer, startHeight, endHeight uint64, ctx context.Context) (map[common.Hash][]db.StateBatch, error) {
 	batches := make(map[common.Hash][]db.StateBatch)
@@ -52,6 +21,7 @@ func QueryStateBatches(filterer *scc.StateCommitmentChainFilterer, startHeight, 
 		return nil, err
 	}
 
+	defer iter.Close()
 	for iter.Next() {
 		batches[iter.Event.Raw.BlockHash] = append(
 			batches[iter.Event.Raw.BlockHash], db.StateBatch{
@@ -63,8 +33,5 @@ func QueryStateBatches(filterer *scc.StateCommitmentChainFilterer, startHeight, 
 				BlockHash: iter.Event.Raw.BlockHash,
 			})
 	}
-	if err := iter.Error(); err != nil {
-		return nil, err
-	}
-	return batches, nil
+	return batches, iter.Error()
 }

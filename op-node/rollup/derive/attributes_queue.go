@@ -6,63 +6,85 @@ import (
 	"io"
 	"time"
 
+	"github.com/ethereum/go-ethereum/log"
+
 	"github.com/ethereum-optimism/optimism/op-node/eth"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/ethereum/go-ethereum/log"
 )
 
-type AttributesQueueOutput interface {
-	AddSafeAttributes(attributes *eth.PayloadAttributes)
-	SafeL2Head() eth.L2BlockRef
-	StageProgress
+// The attributes queue sits in between the batch queue and the engine queue
+// It transforms batches into payload attributes. The outputted payload
+// attributes cannot be buffered because each batch->attributes transformation
+// pulls in data about the current L2 safe head.
+//
+// It also buffers batches that have been output because multiple batches can
+// be created at once.
+//
+// This stage can be reset by clearing its batch buffer.
+// This stage does not need to retain any references to L1 blocks.
+
+type AttributesBuilder interface {
+	PreparePayloadAttributes(ctx context.Context, l2Parent eth.L2BlockRef, epoch eth.BlockID) (attrs *eth.PayloadAttributes, err error)
 }
 
 type AttributesQueue struct {
-	log      log.Logger
-	config   *rollup.Config
-	dl       L1ReceiptsFetcher
-	next     AttributesQueueOutput
-	progress Progress
-	batches  []*BatchData
+	log     log.Logger
+	config  *rollup.Config
+	builder AttributesBuilder
+	prev    *BatchQueue
+	batch   *BatchData
 }
 
-func NewAttributesQueue(log log.Logger, cfg *rollup.Config, l1Fetcher L1ReceiptsFetcher, next AttributesQueueOutput) *AttributesQueue {
+func NewAttributesQueue(log log.Logger, cfg *rollup.Config, builder AttributesBuilder, prev *BatchQueue) *AttributesQueue {
 	return &AttributesQueue{
-		log:    log,
-		config: cfg,
-		dl:     l1Fetcher,
-		next:   next,
+		log:     log,
+		config:  cfg,
+		builder: builder,
+		prev:    prev,
 	}
 }
 
-func (aq *AttributesQueue) AddBatch(batch *BatchData) {
-	aq.log.Debug("Received next batch", "batch_epoch", batch.EpochNum, "batch_timestamp", batch.Timestamp, "tx_count", len(batch.Transactions))
-	aq.batches = append(aq.batches, batch)
+func (aq *AttributesQueue) Origin() eth.L1BlockRef {
+	return aq.prev.Origin()
 }
 
-func (aq *AttributesQueue) Progress() Progress {
-	return aq.progress
+func (aq *AttributesQueue) NextAttributes(ctx context.Context, l2SafeHead eth.L2BlockRef) (*eth.PayloadAttributes, error) {
+	// Get a batch if we need it
+	if aq.batch == nil {
+		batch, err := aq.prev.NextBatch(ctx, l2SafeHead)
+		if err != nil {
+			return nil, err
+		}
+		aq.batch = batch
+	}
+
+	// Actually generate the next attributes
+	if attrs, err := aq.createNextAttributes(ctx, aq.batch, l2SafeHead); err != nil {
+		return nil, err
+	} else {
+		// Clear out the local state once we will succeed
+		aq.batch = nil
+		return attrs, nil
+	}
+
 }
 
-func (aq *AttributesQueue) Step(ctx context.Context, outer Progress) error {
-	if changed, err := aq.progress.Update(outer); err != nil || changed {
-		return err
+// createNextAttributes transforms a batch into a payload attributes. This sets `NoTxPool` and appends the batched transactions
+// to the attributes transaction list
+func (aq *AttributesQueue) createNextAttributes(ctx context.Context, batch *BatchData, l2SafeHead eth.L2BlockRef) (*eth.PayloadAttributes, error) {
+	// sanity check parent hash
+	if batch.ParentHash != l2SafeHead.Hash {
+		return nil, NewResetError(fmt.Errorf("valid batch has bad parent hash %s, expected %s", batch.ParentHash, l2SafeHead.Hash))
 	}
-	if len(aq.batches) == 0 {
-		return io.EOF
+	// sanity check timestamp
+	if expected := l2SafeHead.Time + aq.config.BlockTime; expected != batch.Timestamp {
+		return nil, NewResetError(fmt.Errorf("valid batch has bad timestamp %d, expected %d", batch.Timestamp, expected))
 	}
-	batch := aq.batches[0]
-
 	fetchCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	attrs, crit, err := PreparePayloadAttributes(fetchCtx, aq.config, aq.dl, aq.next.SafeL2Head(), batch.Epoch())
+	attrs, err := aq.builder.PreparePayloadAttributes(fetchCtx, l2SafeHead, batch.Epoch())
 	if err != nil {
-		if crit {
-			return fmt.Errorf("failed to prepare payload attributes for batch: %v", err)
-		} else {
-			aq.log.Error("temporarily failing to prepare payload attributes for batch", "err", err)
-			return nil
-		}
+		return nil, err
 	}
 
 	// we are verifying, not sequencing, we've got all transactions and do not pull from the tx-pool
@@ -72,19 +94,10 @@ func (aq *AttributesQueue) Step(ctx context.Context, outer Progress) error {
 
 	aq.log.Info("generated attributes in payload queue", "txs", len(attrs.Transactions), "timestamp", batch.Timestamp)
 
-	// Slice off the batch once we are guaranteed to succeed
-	aq.batches = aq.batches[1:]
-
-	aq.next.AddSafeAttributes(attrs)
-	return nil
+	return attrs, nil
 }
 
-func (aq *AttributesQueue) ResetStep(ctx context.Context, l1Fetcher L1Fetcher) error {
-	aq.batches = aq.batches[:0]
-	aq.progress = aq.next.Progress()
+func (aq *AttributesQueue) Reset(ctx context.Context, _ eth.L1BlockRef, _ eth.SystemConfig) error {
+	aq.batch = nil
 	return io.EOF
-}
-
-func (aq *AttributesQueue) SafeL2Head() eth.L2BlockRef {
-	return aq.next.SafeL2Head()
 }

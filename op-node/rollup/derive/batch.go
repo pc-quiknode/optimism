@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/ethereum-optimism/optimism/op-node/eth"
-
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -27,7 +26,7 @@ import (
 
 // encodeBufferPool holds temporary encoder buffers for batch encoding
 var encodeBufferPool = sync.Pool{
-	New: func() interface{} { return new(bytes.Buffer) },
+	New: func() any { return new(bytes.Buffer) },
 }
 
 const (
@@ -35,9 +34,10 @@ const (
 )
 
 type BatchV1 struct {
-	EpochNum  rollup.Epoch // aka l1 num
-	EpochHash common.Hash  // block hash
-	Timestamp uint64
+	ParentHash common.Hash  // parent L2 block hash
+	EpochNum   rollup.Epoch // aka l1 num
+	EpochHash  common.Hash  // block hash
+	Timestamp  uint64
 	// no feeRecipient address input, all fees go to a L2 contract
 	Transactions []hexutil.Bytes
 }

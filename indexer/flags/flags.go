@@ -22,12 +22,6 @@ var (
 		Required: true,
 		EnvVar:   prefixEnvVar("BUILD_ENV"),
 	}
-	EthNetworkNameFlag = cli.StringFlag{
-		Name:     "eth-network-name",
-		Usage:    "Ethereum network name",
-		Required: true,
-		EnvVar:   prefixEnvVar("ETH_NETWORK_NAME"),
-	}
 	ChainIDFlag = cli.StringFlag{
 		Name:     "chain-id",
 		Usage:    "Ethereum chain ID",
@@ -51,12 +45,6 @@ var (
 		Usage:    "Address of the L1 address manager",
 		Required: true,
 		EnvVar:   prefixEnvVar("L1_ADDRESS_MANAGER_ADDRESS"),
-	}
-	L2GenesisBlockHashFlag = cli.StringFlag{
-		Name:     "l2-genesis-block-hash",
-		Usage:    "Genesis block hash of the L2 chain",
-		Required: true,
-		EnvVar:   prefixEnvVar("L2_GENESIS_BLOCK_HASH"),
 	}
 	DBHostFlag = cli.StringFlag{
 		Name:     "db-host",
@@ -87,6 +75,23 @@ var (
 		Usage:    "Database name of the database connection",
 		Required: true,
 		EnvVar:   prefixEnvVar("DB_NAME"),
+	}
+
+	/* Bedrock Flags */
+	BedrockFlag = cli.BoolFlag{
+		Name:   "bedrock",
+		Usage:  "Whether or not this indexer should operate in Bedrock mode",
+		EnvVar: prefixEnvVar("BEDROCK"),
+	}
+	BedrockL1StandardBridgeAddress = cli.StringFlag{
+		Name:   "bedrock.l1-standard-bridge-address",
+		Usage:  "Address of the L1 standard bridge",
+		EnvVar: prefixEnvVar("BEDROCK_L1_STANDARD_BRIDGE"),
+	}
+	BedrockOptimismPortalAddress = cli.StringFlag{
+		Name:   "bedrock.portal-address",
+		Usage:  "Address of the portal",
+		EnvVar: prefixEnvVar("BEDROCK_OPTIMISM_PORTAL"),
 	}
 
 	/* Optional Flags */
@@ -126,23 +131,23 @@ var (
 		Value:  50 * time.Millisecond,
 		EnvVar: prefixEnvVar("SENTRY_TRACE_RATE"),
 	}
-	StartBlockNumberFlag = cli.Uint64Flag{
+	L1StartBlockNumberFlag = cli.Uint64Flag{
 		Name:   "start-block-number",
 		Usage:  "The block number to start indexing from. Must be use together with start block hash",
 		Value:  0,
 		EnvVar: prefixEnvVar("START_BLOCK_NUMBER"),
 	}
-	StartBlockHashFlag = cli.StringFlag{
-		Name:   "start-block-hash",
-		Usage:  "The block hash to start indexing from. Must be use together with start block number",
-		Value:  "0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3",
-		EnvVar: prefixEnvVar("START_BLOCK_HASH"),
-	}
-	ConfDepthFlag = cli.Uint64Flag{
-		Name:   "conf-depth",
-		Usage:  "The number of confirmations after which headers are considered confirmed",
+	L1ConfDepthFlag = cli.Uint64Flag{
+		Name:   "l1-conf-depth",
+		Usage:  "The number of confirmations after which headers are considered confirmed on L1",
 		Value:  20,
-		EnvVar: prefixEnvVar("CONF_DEPTH"),
+		EnvVar: prefixEnvVar("L1_CONF_DEPTH"),
+	}
+	L2ConfDepthFlag = cli.Uint64Flag{
+		Name:   "l2-conf-depth",
+		Usage:  "The number of confirmations after which headers are considered confirmed on L1",
+		Value:  24,
+		EnvVar: prefixEnvVar("L2_CONF_DEPTH"),
 	}
 	MaxHeaderBatchSizeFlag = cli.Uint64Flag{
 		Name:   "max-header-batch-size",
@@ -183,12 +188,10 @@ var (
 
 var requiredFlags = []cli.Flag{
 	BuildEnvFlag,
-	EthNetworkNameFlag,
 	ChainIDFlag,
 	L1EthRPCFlag,
 	L2EthRPCFlag,
 	L1AddressManagerAddressFlag,
-	L2GenesisBlockHashFlag,
 	DBHostFlag,
 	DBPortFlag,
 	DBUserFlag,
@@ -197,16 +200,19 @@ var requiredFlags = []cli.Flag{
 }
 
 var optionalFlags = []cli.Flag{
+	BedrockFlag,
+	BedrockL1StandardBridgeAddress,
+	BedrockOptimismPortalAddress,
 	DisableIndexer,
 	LogLevelFlag,
 	LogTerminalFlag,
 	SentryEnableFlag,
 	SentryDsnFlag,
 	SentryTraceRateFlag,
-	ConfDepthFlag,
+	L1ConfDepthFlag,
+	L2ConfDepthFlag,
 	MaxHeaderBatchSizeFlag,
-	StartBlockNumberFlag,
-	StartBlockHashFlag,
+	L1StartBlockNumberFlag,
 	RESTHostnameFlag,
 	RESTPortFlag,
 	MetricsServerEnableFlag,

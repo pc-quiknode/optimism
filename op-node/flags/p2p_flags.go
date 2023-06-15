@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/urfave/cli"
+
+	"github.com/ethereum-optimism/optimism/op-node/p2p"
 )
 
 func p2pEnv(v string) string {
@@ -22,6 +24,33 @@ var (
 		Usage:    "Disable Discv5 (node discovery)",
 		Required: false,
 		EnvVar:   p2pEnv("NO_DISCOVERY"),
+	}
+	PeerScoring = cli.StringFlag{
+		Name: "p2p.scoring.peers",
+		Usage: "Sets the peer scoring strategy for the P2P stack. " +
+			"Can be one of: none or light." +
+			"Custom scoring strategies can be defined in the config file.",
+		Required: false,
+		Value:    "none",
+		EnvVar:   p2pEnv("PEER_SCORING"),
+	}
+
+	// Banning Flag - whether or not we want to act on the scoring
+	Banning = cli.BoolFlag{
+		Name:     "p2p.ban.peers",
+		Usage:    "Enables peer banning. This should ONLY be enabled once certain peer scoring is working correctly.",
+		Required: false,
+		EnvVar:   p2pEnv("PEER_BANNING"),
+	}
+
+	TopicScoring = cli.StringFlag{
+		Name: "p2p.scoring.topics",
+		Usage: "Sets the topic scoring strategy. " +
+			"Can be one of: none or light." +
+			"Custom scoring strategies can be defined in the config file.",
+		Required: false,
+		Value:    "none",
+		EnvVar:   p2pEnv("TOPIC_SCORING"),
 	}
 	P2PPrivPath = cli.StringFlag{
 		Name: "p2p.priv.path",
@@ -97,7 +126,7 @@ var (
 		Usage:    "Comma-separated multiaddr-format peer list. Static connections to make and maintain, these peers will be regarded as trusted.",
 		Required: false,
 		Value:    "",
-		EnvVar:   p2pEnv("BOOTNODES"),
+		EnvVar:   p2pEnv("STATIC"),
 	}
 	HostMux = cli.StringFlag{
 		Name:     "p2p.mux",
@@ -193,12 +222,50 @@ var (
 		EnvVar:    p2pEnv("DISCOVERY_PATH"),
 	}
 	SequencerP2PKeyFlag = cli.StringFlag{
-		Name:      "p2p.sequencer.key",
-		Usage:     "File path of hex-encoded private key for signing off on p2p application messages as sequencer.",
-		Required:  false,
-		TakesFile: true,
-		Value:     "",
-		EnvVar:    p2pEnv("SEQUENCER_KEY"),
+		Name:     "p2p.sequencer.key",
+		Usage:    "Hex-encoded private key for signing off on p2p application messages as sequencer.",
+		Required: false,
+		Value:    "",
+		EnvVar:   p2pEnv("SEQUENCER_KEY"),
+	}
+	GossipMeshDFlag = cli.UintFlag{
+		Name:     "p2p.gossip.mesh.d",
+		Usage:    "Configure GossipSub topic stable mesh target count, a.k.a. desired outbound degree, number of peers to gossip to",
+		Required: false,
+		Hidden:   true,
+		Value:    p2p.DefaultMeshD,
+		EnvVar:   p2pEnv("GOSSIP_MESH_D"),
+	}
+	GossipMeshDloFlag = cli.UintFlag{
+		Name:     "p2p.gossip.mesh.lo",
+		Usage:    "Configure GossipSub topic stable mesh low watermark, a.k.a. lower bound of outbound degree",
+		Required: false,
+		Hidden:   true,
+		Value:    p2p.DefaultMeshDlo,
+		EnvVar:   p2pEnv("GOSSIP_MESH_DLO"),
+	}
+	GossipMeshDhiFlag = cli.UintFlag{
+		Name:     "p2p.gossip.mesh.dhi",
+		Usage:    "Configure GossipSub topic stable mesh high watermark, a.k.a. upper bound of outbound degree, additional peers will not receive gossip",
+		Required: false,
+		Hidden:   true,
+		Value:    p2p.DefaultMeshDhi,
+		EnvVar:   p2pEnv("GOSSIP_MESH_DHI"),
+	}
+	GossipMeshDlazyFlag = cli.UintFlag{
+		Name:     "p2p.gossip.mesh.dlazy",
+		Usage:    "Configure GossipSub gossip target, a.k.a. target degree for gossip only (not messaging like p2p.gossip.mesh.d, just announcements of IHAVE",
+		Required: false,
+		Hidden:   true,
+		Value:    p2p.DefaultMeshDlazy,
+		EnvVar:   p2pEnv("GOSSIP_MESH_DLAZY"),
+	}
+	GossipFloodPublishFlag = cli.BoolFlag{
+		Name:     "p2p.gossip.mesh.floodpublish",
+		Usage:    "Configure GossipSub to publish messages to all known peers on the topic, outside of the mesh, also see Dlazy as less aggressive alternative.",
+		Required: false,
+		Hidden:   true,
+		EnvVar:   p2pEnv("GOSSIP_FLOOD_PUBLISH"),
 	}
 )
 
@@ -230,4 +297,9 @@ var p2pFlags = []cli.Flag{
 	PeerstorePath,
 	DiscoveryPath,
 	SequencerP2PKeyFlag,
+	GossipMeshDFlag,
+	GossipMeshDloFlag,
+	GossipMeshDhiFlag,
+	GossipMeshDlazyFlag,
+	GossipFloodPublishFlag,
 }

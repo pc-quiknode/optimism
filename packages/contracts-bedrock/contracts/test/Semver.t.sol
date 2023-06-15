@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity 0.8.15;
 
 import { CommonTest } from "./CommonTest.t.sol";
 import { Semver } from "../universal/Semver.sol";
@@ -19,38 +19,15 @@ contract Semver_Test is CommonTest {
     /**
      * @notice Deploy a Semver contract
      */
-    function setUp() external {
-        semver = new Semver(7, 8, 9);
+    function setUp() public virtual override {
+        semver = new Semver(7, 8, 0);
     }
 
     /**
-     * @notice Test the getter of the major version
+     * @notice Test the version getter
      */
-    function test_major() external {
-        assertEq(
-            semver.MAJOR_VERSION(),
-            7
-        );
-    }
-
-    /**
-     * @notice Test the getter of the minor version
-     */
-    function test_minor() external {
-        assertEq(
-            semver.MINOR_VERSION(),
-            8
-        );
-    }
-
-    /**
-     * @notice Test the getter of the patch version
-     */
-    function test_patch() external {
-        assertEq(
-            semver.PATCH_VERSION(),
-            9
-        );
+    function test_version_succeeds() external {
+        assertEq(semver.version(), "7.8.0");
     }
 
     /**
@@ -58,24 +35,11 @@ contract Semver_Test is CommonTest {
      *         be able to be accessed from behind a proxy without needing
      *         to initialize the contract.
      */
-    function test_behindProxy() external {
+    function test_behindProxy_succeeds() external {
         Proxy proxy = new Proxy(alice);
         vm.prank(alice);
         proxy.upgradeTo(address(semver));
 
-        assertEq(
-            Semver(address(proxy)).MAJOR_VERSION(),
-            7
-        );
-
-        assertEq(
-            Semver(address(proxy)).MINOR_VERSION(),
-            8
-        );
-
-        assertEq(
-            Semver(address(proxy)).PATCH_VERSION(),
-            9
-        );
+        assertEq(Semver(address(proxy)).version(), "7.8.0");
     }
 }

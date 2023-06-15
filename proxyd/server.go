@@ -6,15 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
+
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus"
@@ -25,30 +29,41 @@ const (
 	ContextKeyAuth              = "authorization"
 	ContextKeyReqID             = "req_id"
 	ContextKeyXForwardedFor     = "x_forwarded_for"
-	MaxBatchRPCCalls            = 100
+	MaxBatchRPCCallsHardLimit   = 100
 	cacheStatusHdr              = "X-Proxyd-Cache-Status"
 	defaultServerTimeout        = time.Second * 10
-	maxLogLength                = 2000
+	maxRequestBodyLogLen        = 2000
 	defaultMaxUpstreamBatchSize = 10
 )
 
 var emptyArrayResponse = json.RawMessage("[]")
 
 type Server struct {
-	backendGroups        map[string]*BackendGroup
-	wsBackendGroup       *BackendGroup
-	wsMethodWhitelist    *StringSet
-	rpcMethodMappings    map[string]string
-	maxBodySize          int64
-	authenticatedPaths   map[string]string
-	timeout              time.Duration
-	maxUpstreamBatchSize int
-	upgrader             *websocket.Upgrader
-	rpcServer            *http.Server
-	wsServer             *http.Server
-	cache                RPCCache
-	srvMu                sync.Mutex
+	backendGroups          map[string]*BackendGroup
+	wsBackendGroup         *BackendGroup
+	wsMethodWhitelist      *StringSet
+	rpcMethodMappings      map[string]string
+	maxBodySize            int64
+	enableRequestLog       bool
+	maxRequestBodyLogLen   int
+	authenticatedPaths     map[string]string
+	timeout                time.Duration
+	maxUpstreamBatchSize   int
+	maxBatchSize           int
+	upgrader               *websocket.Upgrader
+	mainLim                FrontendRateLimiter
+	overrideLims           map[string]FrontendRateLimiter
+	senderLim              FrontendRateLimiter
+	limExemptOrigins       []*regexp.Regexp
+	limExemptUserAgents    []*regexp.Regexp
+	globallyLimitedMethods map[string]bool
+	rpcServer              *http.Server
+	wsServer               *http.Server
+	cache                  RPCCache
+	srvMu                  sync.Mutex
 }
+
+type limiterFunc func(method string) bool
 
 func NewServer(
 	backendGroups map[string]*BackendGroup,
@@ -60,7 +75,13 @@ func NewServer(
 	timeout time.Duration,
 	maxUpstreamBatchSize int,
 	cache RPCCache,
-) *Server {
+	rateLimitConfig RateLimitConfig,
+	senderRateLimitConfig SenderRateLimitConfig,
+	enableRequestLog bool,
+	maxRequestBodyLogLen int,
+	maxBatchSize int,
+	redisClient *redis.Client,
+) (*Server, error) {
 	if cache == nil {
 		cache = &NoopRPCCache{}
 	}
@@ -77,6 +98,59 @@ func NewServer(
 		maxUpstreamBatchSize = defaultMaxUpstreamBatchSize
 	}
 
+	if maxBatchSize == 0 || maxBatchSize > MaxBatchRPCCallsHardLimit {
+		maxBatchSize = MaxBatchRPCCallsHardLimit
+	}
+
+	limiterFactory := func(dur time.Duration, max int, prefix string) FrontendRateLimiter {
+		if rateLimitConfig.UseRedis {
+			return NewRedisFrontendRateLimiter(redisClient, dur, max, prefix)
+		}
+
+		return NewMemoryFrontendRateLimit(dur, max)
+	}
+
+	var mainLim FrontendRateLimiter
+	limExemptOrigins := make([]*regexp.Regexp, 0)
+	limExemptUserAgents := make([]*regexp.Regexp, 0)
+	if rateLimitConfig.BaseRate > 0 {
+		mainLim = limiterFactory(time.Duration(rateLimitConfig.BaseInterval), rateLimitConfig.BaseRate, "main")
+		for _, origin := range rateLimitConfig.ExemptOrigins {
+			pattern, err := regexp.Compile(origin)
+			if err != nil {
+				return nil, err
+			}
+			limExemptOrigins = append(limExemptOrigins, pattern)
+		}
+		for _, agent := range rateLimitConfig.ExemptUserAgents {
+			pattern, err := regexp.Compile(agent)
+			if err != nil {
+				return nil, err
+			}
+			limExemptUserAgents = append(limExemptUserAgents, pattern)
+		}
+	} else {
+		mainLim = NoopFrontendRateLimiter
+	}
+
+	overrideLims := make(map[string]FrontendRateLimiter)
+	globalMethodLims := make(map[string]bool)
+	for method, override := range rateLimitConfig.MethodOverrides {
+		var err error
+		overrideLims[method] = limiterFactory(time.Duration(override.Interval), override.Limit, method)
+		if err != nil {
+			return nil, err
+		}
+
+		if override.Global {
+			globalMethodLims[method] = true
+		}
+	}
+	var senderLim FrontendRateLimiter
+	if senderRateLimitConfig.Enabled {
+		senderLim = limiterFactory(time.Duration(senderRateLimitConfig.Interval), senderRateLimitConfig.Limit, "senders")
+	}
+
 	return &Server{
 		backendGroups:        backendGroups,
 		wsBackendGroup:       wsBackendGroup,
@@ -87,10 +161,19 @@ func NewServer(
 		timeout:              timeout,
 		maxUpstreamBatchSize: maxUpstreamBatchSize,
 		cache:                cache,
+		enableRequestLog:     enableRequestLog,
+		maxRequestBodyLogLen: maxRequestBodyLogLen,
+		maxBatchSize:         maxBatchSize,
 		upgrader: &websocket.Upgrader{
 			HandshakeTimeout: 5 * time.Second,
 		},
-	}
+		mainLim:                mainLim,
+		overrideLims:           overrideLims,
+		globallyLimitedMethods: globalMethodLims,
+		senderLim:              senderLim,
+		limExemptOrigins:       limExemptOrigins,
+		limExemptUserAgents:    limExemptUserAgents,
+	}, nil
 }
 
 func (s *Server) RPCListenAndServe(host string, port int) error {
@@ -154,14 +237,67 @@ func (s *Server) HandleRPC(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel = context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
+	origin := r.Header.Get("Origin")
+	userAgent := r.Header.Get("User-Agent")
+	// Use XFF in context since it will automatically be replaced by the remote IP
+	xff := stripXFF(GetXForwardedFor(ctx))
+	isUnlimitedOrigin := s.isUnlimitedOrigin(origin)
+	isUnlimitedUserAgent := s.isUnlimitedUserAgent(userAgent)
+
+	if xff == "" {
+		writeRPCError(ctx, w, nil, ErrInvalidRequest("request does not include a remote IP"))
+		return
+	}
+
+	isLimited := func(method string) bool {
+		isGloballyLimitedMethod := s.isGlobalLimit(method)
+		if !isGloballyLimitedMethod && (isUnlimitedOrigin || isUnlimitedUserAgent) {
+			return false
+		}
+
+		var lim FrontendRateLimiter
+		if method == "" {
+			lim = s.mainLim
+		} else {
+			lim = s.overrideLims[method]
+		}
+
+		if lim == nil {
+			return false
+		}
+
+		ok, err := lim.Take(ctx, xff)
+		if err != nil {
+			log.Warn("error taking rate limit", "err", err)
+			return true
+		}
+		return !ok
+	}
+
+	if isLimited("") {
+		RecordRPCError(ctx, BackendProxyd, "unknown", ErrOverRateLimit)
+		log.Warn(
+			"rate limited request",
+			"req_id", GetReqID(ctx),
+			"auth", GetAuthCtx(ctx),
+			"user_agent", userAgent,
+			"origin", origin,
+			"remote_ip", xff,
+		)
+		writeRPCError(ctx, w, nil, ErrOverRateLimit)
+		return
+	}
+
 	log.Info(
 		"received RPC request",
 		"req_id", GetReqID(ctx),
 		"auth", GetAuthCtx(ctx),
-		"user_agent", r.Header.Get("user-agent"),
+		"user_agent", userAgent,
+		"origin", origin,
+		"remote_ip", xff,
 	)
 
-	body, err := ioutil.ReadAll(io.LimitReader(r.Body, s.maxBodySize))
+	body, err := io.ReadAll(io.LimitReader(r.Body, s.maxBodySize))
 	if err != nil {
 		log.Error("error reading request body", "err", err)
 		writeRPCError(ctx, w, nil, ErrInternal)
@@ -169,11 +305,13 @@ func (s *Server) HandleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 	RecordRequestPayloadSize(ctx, len(body))
 
-	log.Info("Raw RPC request",
-		"body", truncate(string(body)),
-		"req_id", GetReqID(ctx),
-		"auth", GetAuthCtx(ctx),
-	)
+	if s.enableRequestLog {
+		log.Info("Raw RPC request",
+			"body", truncate(string(body), s.maxRequestBodyLogLen),
+			"req_id", GetReqID(ctx),
+			"auth", GetAuthCtx(ctx),
+		)
+	}
 
 	if IsBatch(body) {
 		reqs, err := ParseBatchRPCReq(body)
@@ -184,7 +322,9 @@ func (s *Server) HandleRPC(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if len(reqs) > MaxBatchRPCCalls {
+		RecordBatchSize(len(reqs))
+
+		if len(reqs) > s.maxBatchSize {
 			RecordRPCError(ctx, BackendProxyd, MethodUnknown, ErrTooManyBatchRequests)
 			writeRPCError(ctx, w, nil, ErrTooManyBatchRequests)
 			return
@@ -195,7 +335,7 @@ func (s *Server) HandleRPC(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		batchRes, batchContainsCached, err := s.handleBatchRPC(ctx, reqs, true)
+		batchRes, batchContainsCached, err := s.handleBatchRPC(ctx, reqs, isLimited, true)
 		if err == context.DeadlineExceeded {
 			writeRPCError(ctx, w, nil, ErrGatewayTimeout)
 			return
@@ -211,7 +351,7 @@ func (s *Server) HandleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rawBody := json.RawMessage(body)
-	backendRes, cached, err := s.handleBatchRPC(ctx, []json.RawMessage{rawBody}, false)
+	backendRes, cached, err := s.handleBatchRPC(ctx, []json.RawMessage{rawBody}, isLimited, false)
 	if err != nil {
 		writeRPCError(ctx, w, nil, ErrInternal)
 		return
@@ -220,7 +360,7 @@ func (s *Server) HandleRPC(w http.ResponseWriter, r *http.Request) {
 	writeRPCRes(ctx, w, backendRes[0])
 }
 
-func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isBatch bool) ([]*RPCRes, bool, error) {
+func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isLimited limiterFunc, isBatch bool) ([]*RPCRes, bool, error) {
 	// A request set is transformed into groups of batches.
 	// Each batch group maps to a forwarded JSON-RPC batch request (subject to maxUpstreamBatchSize constraints)
 	// A groupID is used to decouple Requests that have duplicate ID so they're not part of the same batch that's
@@ -271,6 +411,33 @@ func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isB
 			continue
 		}
 
+		// Take rate limit for specific methods.
+		// NOTE: eventually, this should apply to all batch requests. However,
+		// since we don't have data right now on the size of each batch, we
+		// only apply this to the methods that have an additional rate limit.
+		if _, ok := s.overrideLims[parsedReq.Method]; ok && isLimited(parsedReq.Method) {
+			log.Info(
+				"rate limited specific RPC",
+				"source", "rpc",
+				"req_id", GetReqID(ctx),
+				"method", parsedReq.Method,
+			)
+			RecordRPCError(ctx, BackendProxyd, parsedReq.Method, ErrOverRateLimit)
+			responses[i] = NewRPCErrorRes(parsedReq.ID, ErrOverRateLimit)
+			continue
+		}
+
+		// Apply a sender-based rate limit if it is enabled. Note that sender-based rate
+		// limits apply regardless of origin or user-agent. As such, they don't use the
+		// isLimited method.
+		if parsedReq.Method == "eth_sendRawTransaction" && s.senderLim != nil {
+			if err := s.rateLimitSender(ctx, parsedReq); err != nil {
+				RecordRPCError(ctx, BackendProxyd, parsedReq.Method, err)
+				responses[i] = NewRPCErrorRes(parsedReq.ID, err)
+				continue
+			}
+		}
+
 		id := string(parsedReq.ID)
 		// If this is a duplicate Request ID, move the Request to a new batchGroup
 		ids[id]++
@@ -315,6 +482,7 @@ func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isB
 					"error forwarding RPC batch",
 					"batch_size", len(elems),
 					"backend_group", group,
+					"req_id", GetReqID(ctx),
 					"err", err,
 				)
 				res = nil
@@ -382,6 +550,14 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) populateContext(w http.ResponseWriter, r *http.Request) context.Context {
 	vars := mux.Vars(r)
 	authorization := vars["authorization"]
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		ipPort := strings.Split(r.RemoteAddr, ":")
+		if len(ipPort) == 2 {
+			xff = ipPort[0]
+		}
+	}
+	ctx := context.WithValue(r.Context(), ContextKeyXForwardedFor, xff) // nolint:staticcheck
 
 	if s.authenticatedPaths == nil {
 		// handle the edge case where auth is disabled
@@ -392,35 +568,93 @@ func (s *Server) populateContext(w http.ResponseWriter, r *http.Request) context
 			w.WriteHeader(404)
 			return nil
 		}
-		return context.WithValue(
-			r.Context(),
-			ContextKeyReqID, // nolint:staticcheck
-			randStr(10),
-		)
-	}
-
-	if authorization == "" || s.authenticatedPaths[authorization] == "" {
-		log.Info("blocked unauthorized request", "authorization", authorization)
-		httpResponseCodesTotal.WithLabelValues("401").Inc()
-		w.WriteHeader(401)
-		return nil
-	}
-
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff == "" {
-		ipPort := strings.Split(r.RemoteAddr, ":")
-		if len(ipPort) == 2 {
-			xff = ipPort[0]
+	} else {
+		if authorization == "" || s.authenticatedPaths[authorization] == "" {
+			log.Info("blocked unauthorized request", "authorization", authorization)
+			httpResponseCodesTotal.WithLabelValues("401").Inc()
+			w.WriteHeader(401)
+			return nil
 		}
+
+		ctx = context.WithValue(r.Context(), ContextKeyAuth, s.authenticatedPaths[authorization]) // nolint:staticcheck
 	}
 
-	ctx := context.WithValue(r.Context(), ContextKeyAuth, s.authenticatedPaths[authorization]) // nolint:staticcheck
-	ctx = context.WithValue(ctx, ContextKeyXForwardedFor, xff)                                 // nolint:staticcheck
 	return context.WithValue(
 		ctx,
 		ContextKeyReqID, // nolint:staticcheck
 		randStr(10),
 	)
+}
+
+func (s *Server) isUnlimitedOrigin(origin string) bool {
+	for _, pat := range s.limExemptOrigins {
+		if pat.MatchString(origin) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (s *Server) isUnlimitedUserAgent(origin string) bool {
+	for _, pat := range s.limExemptUserAgents {
+		if pat.MatchString(origin) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) isGlobalLimit(method string) bool {
+	return s.globallyLimitedMethods[method]
+}
+
+func (s *Server) rateLimitSender(ctx context.Context, req *RPCReq) error {
+	var params []string
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		log.Debug("error unmarshaling raw transaction params", "err", err, "req_Id", GetReqID(ctx))
+		return ErrParseErr
+	}
+
+	if len(params) != 1 {
+		log.Debug("raw transaction request has invalid number of params", "req_id", GetReqID(ctx))
+		// The error below is identical to the one Geth responds with.
+		return ErrInvalidParams("missing value for required argument 0")
+	}
+
+	var data hexutil.Bytes
+	if err := data.UnmarshalText([]byte(params[0])); err != nil {
+		log.Debug("error decoding raw tx data", "err", err, "req_id", GetReqID(ctx))
+		// Geth returns the raw error from UnmarshalText.
+		return ErrInvalidParams(err.Error())
+	}
+
+	// Inflates a types.Transaction object from the transaction's raw bytes.
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalBinary(data); err != nil {
+		log.Debug("could not unmarshal transaction", "err", err, "req_id", GetReqID(ctx))
+		return ErrInvalidParams(err.Error())
+	}
+
+	// Convert the transaction into a Message object so that we can get the
+	// sender. This method performs an ecrecover, which can be expensive.
+	msg, err := tx.AsMessage(types.LatestSignerForChainID(tx.ChainId()), nil)
+	if err != nil {
+		log.Debug("could not get message from transaction", "err", err, "req_id", GetReqID(ctx))
+		return ErrInvalidParams(err.Error())
+	}
+
+	ok, err := s.senderLim.Take(ctx, fmt.Sprintf("%s:%d", msg.From().Hex(), tx.Nonce()))
+	if err != nil {
+		log.Error("error taking from sender limiter", "err", err, "req_id", GetReqID(ctx))
+		return ErrInternal
+	}
+	if !ok {
+		log.Debug("sender rate limit exceeded", "sender", msg.From(), "req_id", GetReqID(ctx))
+		return ErrOverSenderRateLimit
+	}
+
+	return nil
 }
 
 func setCacheHeader(w http.ResponseWriter, cached bool) {
@@ -527,9 +761,13 @@ func (n *NoopRPCCache) PutRPC(context.Context, *RPCReq, *RPCRes) error {
 	return nil
 }
 
-func truncate(str string) string {
-	if len(str) > maxLogLength {
-		return str[:maxLogLength] + "..."
+func truncate(str string, maxLen int) string {
+	if maxLen == 0 {
+		maxLen = maxRequestBodyLogLen
+	}
+
+	if len(str) > maxLen {
+		return str[:maxLen] + "..."
 	} else {
 		return str
 	}

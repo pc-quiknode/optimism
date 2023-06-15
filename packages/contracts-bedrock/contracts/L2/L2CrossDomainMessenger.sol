@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity 0.8.15;
 
 import { AddressAliasHelper } from "../vendor/AddressAliasHelper.sol";
-import { PredeployAddresses } from "../libraries/PredeployAddresses.sol";
+import { Predeploys } from "../libraries/Predeploys.sol";
 import { CrossDomainMessenger } from "../universal/CrossDomainMessenger.sol";
 import { Semver } from "../universal/Semver.sol";
 import { L2ToL1MessagePasser } from "./L2ToL1MessagePasser.sol";
@@ -17,24 +17,22 @@ import { L2ToL1MessagePasser } from "./L2ToL1MessagePasser.sol";
  */
 contract L2CrossDomainMessenger is CrossDomainMessenger, Semver {
     /**
-     * @custom:semver 0.0.1
+     * @custom:semver 1.1.0
      *
      * @param _l1CrossDomainMessenger Address of the L1CrossDomainMessenger contract.
      */
-    constructor(address _l1CrossDomainMessenger) Semver(0, 0, 1) {
-        initialize(_l1CrossDomainMessenger);
+    constructor(address _l1CrossDomainMessenger)
+        Semver(1, 1, 0)
+        CrossDomainMessenger(_l1CrossDomainMessenger)
+    {
+        initialize();
     }
 
     /**
      * @notice Initializer.
-     *
-     * @param _l1CrossDomainMessenger Address of the L1CrossDomainMessenger contract.
      */
-    function initialize(address _l1CrossDomainMessenger) public initializer {
-        address[] memory blockedSystemAddresses = new address[](2);
-        blockedSystemAddresses[0] = address(this);
-        blockedSystemAddresses[1] = PredeployAddresses.L2_TO_L1_MESSAGE_PASSER;
-        __CrossDomainMessenger_init(_l1CrossDomainMessenger, blockedSystemAddresses);
+    function initialize() public initializer {
+        __CrossDomainMessenger_init();
     }
 
     /**
@@ -44,25 +42,11 @@ contract L2CrossDomainMessenger is CrossDomainMessenger, Semver {
      * @return Address of the L1CrossDomainMessenger contract.
      */
     function l1CrossDomainMessenger() public view returns (address) {
-        return otherMessenger;
+        return OTHER_MESSENGER;
     }
 
     /**
-     * @notice Checks that the message sender is the L1CrossDomainMessenger on L1.
-     *
-     * @return True if the message sender is the L1CrossDomainMessenger on L1.
-     */
-    function _isOtherMessenger() internal view override returns (bool) {
-        return AddressAliasHelper.undoL1ToL2Alias(msg.sender) == otherMessenger;
-    }
-
-    /**
-     * @notice Sends a message from L2 to L1.
-     *
-     * @param _to       Address to send the message to.
-     * @param _gasLimit Minimum gas limit to execute the message with.
-     * @param _value    ETH value to send with the message.
-     * @param _data     Data to trigger the recipient with.
+     * @inheritdoc CrossDomainMessenger
      */
     function _sendMessage(
         address _to,
@@ -70,8 +54,22 @@ contract L2CrossDomainMessenger is CrossDomainMessenger, Semver {
         uint256 _value,
         bytes memory _data
     ) internal override {
-        L2ToL1MessagePasser(payable(PredeployAddresses.L2_TO_L1_MESSAGE_PASSER)).initiateWithdrawal{
+        L2ToL1MessagePasser(payable(Predeploys.L2_TO_L1_MESSAGE_PASSER)).initiateWithdrawal{
             value: _value
         }(_to, _gasLimit, _data);
+    }
+
+    /**
+     * @inheritdoc CrossDomainMessenger
+     */
+    function _isOtherMessenger() internal view override returns (bool) {
+        return AddressAliasHelper.undoL1ToL2Alias(msg.sender) == OTHER_MESSENGER;
+    }
+
+    /**
+     * @inheritdoc CrossDomainMessenger
+     */
+    function _isUnsafeTarget(address _target) internal view override returns (bool) {
+        return _target == address(this) || _target == address(Predeploys.L2_TO_L1_MESSAGE_PASSER);
     }
 }

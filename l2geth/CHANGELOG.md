@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.5.33
+
+### Patch Changes
+
+- 33acb7c6a: Has l2geth return a NonceToHigh response if the txn nonce is greater than the expected nonce.
+
+## 0.5.32
+
+### Patch Changes
+
+- ea817097b: Use default cas gap of 25 million
+
+## 0.5.31
+
+### Patch Changes
+
+- ccbca22c3: Patch release for additional instrumentation for the Bedrock upgrade.
+
+## 0.5.30
+
+### Patch Changes
+
+- 0e8652c29: Close down the syncservice more cleanly
+
+## 0.5.29
+
+### Patch Changes
+
+- 4e65ceb9d: Dedupe dumper addresses in memory
+
+## 0.5.28
+
+### Patch Changes
+
+- ac0f14f5: Fix state dumper
+- 5005da9a: Fixes a small l2geth bug when trying to dump state
+
+## 0.5.27
+
+### Patch Changes
+
+- 596c974e: Kick the build
+
+## 0.5.26
+
+### Patch Changes
+
+- 397b27ee: Add data exporter
+
+## 0.5.25
+
+### Patch Changes
+
+- 89f1abfa: add --rpc.evmtimeout flag to configure timeout for eth_call
+
+## 0.5.24
+
+### Patch Changes
+
+- c3e66e57: Add the gas estimation block tag to `eth_estimateGas` to be RPC compliant
+
 ## 0.5.23
 
 ### Patch Changes

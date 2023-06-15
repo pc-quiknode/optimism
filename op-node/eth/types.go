@@ -6,20 +6,44 @@ import (
 	"math/big"
 	"reflect"
 
-	"github.com/ethereum/go-ethereum/trie"
+	"github.com/holiman/uint256"
 
+	"github.com/ethereum/go-ethereum/beacon/engine"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/beacon"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/holiman/uint256"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 type ErrorCode int
 
 const (
-	UnavailablePayload ErrorCode = -32001
+	UnknownPayload           ErrorCode = -32001 // Payload does not exist / is not available.
+	InvalidForkchoiceState   ErrorCode = -38002 // Forkchoice state is invalid / inconsistent.
+	InvalidPayloadAttributes ErrorCode = -38003 // Payload attributes are invalid / inconsistent.
 )
+
+// InputError distinguishes an user-input error from regular rpc errors,
+// to help the (Engine) API user divert from accidental input mistakes.
+type InputError struct {
+	Inner error
+	Code  ErrorCode
+}
+
+func (ie InputError) Error() string {
+	return fmt.Sprintf("input error %d: %s", ie.Code, ie.Inner.Error())
+}
+
+func (ie InputError) Unwrap() error {
+	return ie.Inner
+}
+
+// Is checks if the error is the given target type.
+// Any type of InputError counts, regardless of code.
+func (ie InputError) Is(target error) bool {
+	_, ok := target.(InputError)
+	return ok // we implement Unwrap, so we do not have to check the inner type now
+}
 
 type Bytes32 [32]byte
 
@@ -99,7 +123,7 @@ type Uint256Quantity = uint256.Int
 
 type Data = hexutil.Bytes
 
-type PayloadID = beacon.PayloadID
+type PayloadID = engine.PayloadID
 
 type ExecutionPayload struct {
 	ParentHash    common.Hash     `json:"parentHash"`
@@ -175,7 +199,7 @@ func BlockAsPayload(bl *types.Block) (*ExecutionPayload, error) {
 	for i, tx := range bl.Transactions() {
 		otx, err := tx.MarshalBinary()
 		if err != nil {
-			return nil, fmt.Errorf("tx %d failed to marshal: %v", i, err)
+			return nil, fmt.Errorf("tx %d failed to marshal: %w", i, err)
 		}
 		opaqueTxs[i] = otx
 	}
@@ -208,6 +232,8 @@ type PayloadAttributes struct {
 	Transactions []Data `json:"transactions,omitempty"`
 	// NoTxPool to disable adding any transactions from the transaction-pool.
 	NoTxPool bool `json:"noTxPool,omitempty"`
+	// GasLimit override
+	GasLimit *Uint64Quantity `json:"gasLimit,omitempty"`
 }
 
 type ExecutePayloadStatus string
@@ -251,4 +277,19 @@ type ForkchoiceUpdatedResult struct {
 	PayloadStatus PayloadStatusV1 `json:"payloadStatus"`
 	// the payload id if requested
 	PayloadID *PayloadID `json:"payloadId"`
+}
+
+// SystemConfig represents the rollup system configuration that carries over in every L2 block,
+// and may be changed through L1 system config events.
+// The initial SystemConfig at rollup genesis is embedded in the rollup configuration.
+type SystemConfig struct {
+	// BatcherAddr identifies the batch-sender address used in batch-inbox data-transaction filtering.
+	BatcherAddr common.Address `json:"batcherAddr"`
+	// Overhead identifies the L1 fee overhead, and is passed through opaquely to op-geth.
+	Overhead Bytes32 `json:"overhead"`
+	// Scalar identifies the L1 fee scalar, and is passed through opaquely to op-geth.
+	Scalar Bytes32 `json:"scalar"`
+	// GasLimit identifies the L2 block gas limit
+	GasLimit uint64 `json:"gasLimit"`
+	// More fields can be added for future SystemConfig versions.
 }

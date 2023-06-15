@@ -8,7 +8,7 @@ LDFLAGSSTRING +=-X main.Version=$(VERSION)
 LDFLAGS := -ldflags "$(LDFLAGSSTRING)"
 
 op-proposer:
-	env GO111MODULE=on go build -v $(LDFLAGS) -o ./bin/op-proposer ./cmd
+	env GO111MODULE=on GOOS=$(TARGETOS) GOARCH=$(TARGETARCH) go build -v $(LDFLAGS) -o ./bin/op-proposer ./cmd
 
 clean:
 	rm bin/op-proposer
@@ -17,7 +17,7 @@ test:
 	go test -v ./...
 
 lint:
-	golangci-lint run -E asciicheck,goimports,misspell ./...
+	golangci-lint run -E goimports,sqlclosecheck,bodyclose,asciicheck,misspell,errorlint -e "errors.As" -e "errors.Is"
 
 .PHONY: \
 	clean \

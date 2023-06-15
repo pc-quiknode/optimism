@@ -2,50 +2,47 @@ package p2p
 
 import (
 	"context"
-	"crypto/ecdsa"
 	"crypto/rand"
 	"math/big"
 	"net"
 	"testing"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-node/metrics"
+	"github.com/ethereum/go-ethereum/common"
+	ds "github.com/ipfs/go-datastore"
+	"github.com/ipfs/go-datastore/sync"
+	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/connmgr"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
+	tswarm "github.com/libp2p/go-libp2p/p2p/net/swarm/testing"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/slices"
 
-	"github.com/ethereum-optimism/optimism/op-node/eth"
-
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/ethereum-optimism/optimism/op-node/testlog"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rpc"
-	ds "github.com/ipfs/go-datastore"
-	"github.com/ipfs/go-datastore/sync"
-	"github.com/libp2p/go-libp2p-core/connmgr"
-	"github.com/libp2p/go-libp2p-core/crypto"
-	"github.com/libp2p/go-libp2p-core/network"
-	"github.com/libp2p/go-libp2p-core/peer"
-	tswarm "github.com/libp2p/go-libp2p-swarm/testing"
-	yamux "github.com/libp2p/go-libp2p-yamux"
-	lconf "github.com/libp2p/go-libp2p/config"
-	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
-	"github.com/stretchr/testify/require"
+
+	"github.com/ethereum-optimism/optimism/op-node/eth"
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-node/testlog"
+	"github.com/ethereum-optimism/optimism/op-node/testutils"
 )
 
 func TestingConfig(t *testing.T) *Config {
 	p, _, err := crypto.GenerateSecp256k1Key(rand.Reader)
 	require.NoError(t, err, "failed to generate new p2p priv key")
-	mtpt, err := lconf.MuxerConstructor(yamux.DefaultTransport)
-	require.NoError(t, err)
-	mux := lconf.MsMuxC{MuxC: mtpt, ID: "/yamux/1.0.0"}
 
 	return &Config{
-		Priv:                (*ecdsa.PrivateKey)((p).(*crypto.Secp256k1PrivateKey)),
+		Priv:                (p).(*crypto.Secp256k1PrivateKey),
 		DisableP2P:          false,
 		NoDiscovery:         true, // we statically peer during most tests.
 		ListenIP:            net.IP{127, 0, 0, 1},
 		ListenTCPPort:       0, // bind to any available port
 		StaticPeers:         nil,
-		HostMux:             []lconf.MsMuxC{mux},
+		HostMux:             []libp2p.Option{YamuxC()},
 		NoTransportSecurity: true,
 		PeersLo:             1,
 		PeersHi:             10,
@@ -67,10 +64,10 @@ func TestingConfig(t *testing.T) *Config {
 func TestP2PSimple(t *testing.T) {
 	confA := TestingConfig(t)
 	confB := TestingConfig(t)
-	hostA, err := confA.Host(testlog.Logger(t, log.LvlError).New("host", "A"))
+	hostA, err := confA.Host(testlog.Logger(t, log.LvlError).New("host", "A"), nil)
 	require.NoError(t, err, "failed to launch host A")
 	defer hostA.Close()
-	hostB, err := confB.Host(testlog.Logger(t, log.LvlError).New("host", "B"))
+	hostB, err := confB.Host(testlog.Logger(t, log.LvlError).New("host", "B"), nil)
 	require.NoError(t, err, "failed to launch host B")
 	defer hostB.Close()
 	err = hostA.Connect(context.Background(), peer.AddrInfo{ID: hostB.ID(), Addrs: hostB.Addrs()})
@@ -96,24 +93,15 @@ func TestP2PFull(t *testing.T) {
 	pB, _, err := crypto.GenerateSecp256k1Key(rand.Reader)
 	require.NoError(t, err, "failed to generate new p2p priv key")
 
-	mplexC, err := mplexC()
-	require.NoError(t, err)
-	yamuxC, err := yamuxC()
-	require.NoError(t, err)
-	noiseC, err := noiseC()
-	require.NoError(t, err)
-	tlsC, err := tlsC()
-	require.NoError(t, err)
-
 	confA := Config{
-		Priv:                (*ecdsa.PrivateKey)((pA).(*crypto.Secp256k1PrivateKey)),
+		Priv:                (pA).(*crypto.Secp256k1PrivateKey),
 		DisableP2P:          false,
 		NoDiscovery:         true,
 		ListenIP:            net.IP{127, 0, 0, 1},
 		ListenTCPPort:       0, // bind to any available port
 		StaticPeers:         nil,
-		HostMux:             []lconf.MsMuxC{yamuxC, mplexC},
-		HostSecurity:        []lconf.MsSecC{noiseC, tlsC},
+		HostMux:             []libp2p.Option{YamuxC(), MplexC()},
+		HostSecurity:        []libp2p.Option{NoiseC(), TlsC()},
 		NoTransportSecurity: false,
 		PeersLo:             1,
 		PeersHi:             10,
@@ -129,12 +117,15 @@ func TestP2PFull(t *testing.T) {
 	}
 	// copy config A, and change the settings for B
 	confB := confA
-	confB.Priv = (*ecdsa.PrivateKey)((pB).(*crypto.Secp256k1PrivateKey))
+	confB.Priv = (pB).(*crypto.Secp256k1PrivateKey)
 	confB.Store = sync.MutexWrap(ds.NewMapDatastore())
 	// TODO: maybe swap the order of sec/mux preferences, to test that negotiation works
 
+	runCfgA := &testutils.MockRuntimeConfig{P2PSeqAddress: common.Address{0x42}}
+	runCfgB := &testutils.MockRuntimeConfig{P2PSeqAddress: common.Address{0x42}}
+
 	logA := testlog.Logger(t, log.LvlError).New("host", "A")
-	nodeA, err := NewNodeP2P(context.Background(), &rollup.Config{}, logA, &confA, &mockGossipIn{})
+	nodeA, err := NewNodeP2P(context.Background(), &rollup.Config{}, logA, &confA, &mockGossipIn{}, runCfgA, nil)
 	require.NoError(t, err)
 	defer nodeA.Close()
 
@@ -145,7 +136,7 @@ func TestP2PFull(t *testing.T) {
 			conns <- conn
 		}})
 
-	backend := NewP2PAPIBackend(nodeA, logA, metrics.NewMetrics(""))
+	backend := NewP2PAPIBackend(nodeA, logA, nil)
 	srv := rpc.NewServer()
 	require.NoError(t, srv.RegisterName("opp2p", backend))
 	client := rpc.DialInProc(srv)
@@ -157,7 +148,7 @@ func TestP2PFull(t *testing.T) {
 
 	logB := testlog.Logger(t, log.LvlError).New("host", "B")
 
-	nodeB, err := NewNodeP2P(context.Background(), &rollup.Config{}, logB, &confB, &mockGossipIn{})
+	nodeB, err := NewNodeP2P(context.Background(), &rollup.Config{}, logB, &confB, &mockGossipIn{}, runCfgB, nil)
 	require.NoError(t, err)
 	defer nodeB.Close()
 	hostB := nodeB.Host()
@@ -177,7 +168,7 @@ func TestP2PFull(t *testing.T) {
 
 	_, err = p2pClientA.DiscoveryTable(ctx)
 	// rpc does not preserve error type
-	require.Equal(t, err.Error(), DisabledDiscovery.Error(), "expecting discv5 to be disabled")
+	require.Equal(t, err.Error(), ErrDisabledDiscovery.Error(), "expecting discv5 to be disabled")
 
 	require.NoError(t, p2pClientA.BlockPeer(ctx, hostB.ID()))
 	blockedPeers, err := p2pClientA.ListBlockedPeers(ctx)
@@ -239,15 +230,6 @@ func TestDiscovery(t *testing.T) {
 	logB := testlog.Logger(t, log.LvlError).New("host", "B")
 	logC := testlog.Logger(t, log.LvlError).New("host", "C")
 
-	mplexC, err := mplexC()
-	require.NoError(t, err)
-	yamuxC, err := yamuxC()
-	require.NoError(t, err)
-	noiseC, err := noiseC()
-	require.NoError(t, err)
-	tlsC, err := tlsC()
-	require.NoError(t, err)
-
 	discDBA, err := enode.OpenDB("") // "" = memory db
 	require.NoError(t, err)
 	discDBB, err := enode.OpenDB("")
@@ -258,7 +240,7 @@ func TestDiscovery(t *testing.T) {
 	rollupCfg := &rollup.Config{L2ChainID: big.NewInt(901)}
 
 	confA := Config{
-		Priv:                (*ecdsa.PrivateKey)((pA).(*crypto.Secp256k1PrivateKey)),
+		Priv:                (pA).(*crypto.Secp256k1PrivateKey),
 		DisableP2P:          false,
 		NoDiscovery:         false,
 		AdvertiseIP:         net.IP{127, 0, 0, 1},
@@ -266,8 +248,8 @@ func TestDiscovery(t *testing.T) {
 		ListenIP:            net.IP{127, 0, 0, 1},
 		ListenTCPPort:       0, // bind to any available port
 		StaticPeers:         nil,
-		HostMux:             []lconf.MsMuxC{yamuxC, mplexC},
-		HostSecurity:        []lconf.MsSecC{noiseC, tlsC},
+		HostMux:             []libp2p.Option{YamuxC(), MplexC()},
+		HostSecurity:        []libp2p.Option{NoiseC(), TlsC()},
 		NoTransportSecurity: false,
 		PeersLo:             1,
 		PeersHi:             10,
@@ -284,14 +266,18 @@ func TestDiscovery(t *testing.T) {
 	}
 	// copy config A, and change the settings for B
 	confB := confA
-	confB.Priv = (*ecdsa.PrivateKey)((pB).(*crypto.Secp256k1PrivateKey))
+	confB.Priv = (pB).(*crypto.Secp256k1PrivateKey)
 	confB.Store = sync.MutexWrap(ds.NewMapDatastore())
 	confB.DiscoveryDB = discDBB
+
+	runCfgA := &testutils.MockRuntimeConfig{P2PSeqAddress: common.Address{0x42}}
+	runCfgB := &testutils.MockRuntimeConfig{P2PSeqAddress: common.Address{0x42}}
+	runCfgC := &testutils.MockRuntimeConfig{P2PSeqAddress: common.Address{0x42}}
 
 	resourcesCtx, resourcesCancel := context.WithCancel(context.Background())
 	defer resourcesCancel()
 
-	nodeA, err := NewNodeP2P(context.Background(), rollupCfg, logA, &confA, &mockGossipIn{})
+	nodeA, err := NewNodeP2P(context.Background(), rollupCfg, logA, &confA, &mockGossipIn{}, runCfgA, nil)
 	require.NoError(t, err)
 	defer nodeA.Close()
 	hostA := nodeA.Host()
@@ -301,12 +287,12 @@ func TestDiscovery(t *testing.T) {
 	confB.Bootnodes = []*enode.Node{nodeA.Dv5Udp().Self()}
 	// Copy B config to C, and ensure they have a different priv / peerstore
 	confC := confB
-	confC.Priv = (*ecdsa.PrivateKey)((pC).(*crypto.Secp256k1PrivateKey))
+	confC.Priv = (pC).(*crypto.Secp256k1PrivateKey)
 	confC.Store = sync.MutexWrap(ds.NewMapDatastore())
 	confB.DiscoveryDB = discDBC
 
 	// Start B
-	nodeB, err := NewNodeP2P(context.Background(), rollupCfg, logB, &confB, &mockGossipIn{})
+	nodeB, err := NewNodeP2P(context.Background(), rollupCfg, logB, &confB, &mockGossipIn{}, runCfgB, nil)
 	require.NoError(t, err)
 	defer nodeB.Close()
 	hostB := nodeB.Host()
@@ -321,7 +307,7 @@ func TestDiscovery(t *testing.T) {
 		}})
 
 	// Start C
-	nodeC, err := NewNodeP2P(context.Background(), rollupCfg, logC, &confC, &mockGossipIn{})
+	nodeC, err := NewNodeP2P(context.Background(), rollupCfg, logC, &confC, &mockGossipIn{}, runCfgC, nil)
 	require.NoError(t, err)
 	defer nodeC.Close()
 	hostC := nodeC.Host()
@@ -329,19 +315,22 @@ func TestDiscovery(t *testing.T) {
 
 	// B and C don't know each other yet, but both have A as a bootnode.
 	// It should only be a matter of time for them to connect, if they discover each other via A.
-	var firstPeersOfB []peer.ID
-	for i := 0; i < 2; i++ {
+	timeout := time.After(time.Second * 60)
+	var peersOfB []peer.ID
+	// B should be connected to the bootnode (A) it used (it's a valid optimism node to connect to here)
+	// C should also be connected, although this one might take more time to discover
+	for !slices.Contains(peersOfB, hostA.ID()) || !slices.Contains(peersOfB, hostC.ID()) {
 		select {
-		case <-time.After(time.Second * 30):
-			t.Fatal("failed to get connection to B in time")
+		case <-timeout:
+			var peers []string
+			for _, id := range peersOfB {
+				peers = append(peers, id.String())
+			}
+			t.Fatalf("timeout reached - expected host A: %v and host C: %v to be in %v", hostA.ID().String(), hostC.ID().String(), peers)
 		case c := <-connsB:
-			firstPeersOfB = append(firstPeersOfB, c.RemotePeer())
+			peersOfB = append(peersOfB, c.RemotePeer())
 		}
 	}
-	// B should be connected to the bootnode it used (it's a valid optimism node to connect to here)
-	require.Contains(t, firstPeersOfB, hostA.ID())
-	// C should be connected, although this one might take more time to discover
-	require.Contains(t, firstPeersOfB, hostC.ID())
 }
 
 // Most tests should use mocknets instead of using the actual local host network

@@ -197,6 +197,17 @@ func (d *Database) AddIndexedL1Block(block *IndexedL1Block) error {
 	VALUES
 		($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
+
+	const updateProvenWithdrawalStatement = `
+	UPDATE withdrawals SET (br_withdrawal_proven_tx_hash, br_withdrawal_proven_log_index) = ($1, $2)
+	WHERE br_withdrawal_hash = $3
+	`
+
+	const updateFinalizedWithdrawalStatement = `
+	UPDATE withdrawals SET (br_withdrawal_finalized_tx_hash, br_withdrawal_finalized_log_index, br_withdrawal_finalized_success) = ($1, $2, $3)
+	WHERE br_withdrawal_hash = $4
+	`
+
 	return txn(d.db, func(tx *sql.Tx) error {
 		_, err := tx.Exec(
 			insertBlockStatement,
@@ -209,26 +220,53 @@ func (d *Database) AddIndexedL1Block(block *IndexedL1Block) error {
 			return err
 		}
 
-		if len(block.Deposits) == 0 {
-			return nil
+		if len(block.Deposits) > 0 {
+			for _, deposit := range block.Deposits {
+				_, err = tx.Exec(
+					insertDepositStatement,
+					NewGUID(),
+					deposit.FromAddress.String(),
+					deposit.ToAddress.String(),
+					deposit.L1Token.String(),
+					deposit.L2Token.String(),
+					deposit.Amount.String(),
+					deposit.TxHash.String(),
+					deposit.LogIndex,
+					block.Hash.String(),
+					deposit.Data,
+				)
+				if err != nil {
+					return err
+				}
+			}
 		}
 
-		for _, deposit := range block.Deposits {
-			_, err = tx.Exec(
-				insertDepositStatement,
-				NewGUID(),
-				deposit.FromAddress.String(),
-				deposit.ToAddress.String(),
-				deposit.L1Token.String(),
-				deposit.L2Token.String(),
-				deposit.Amount.String(),
-				deposit.TxHash.String(),
-				deposit.LogIndex,
-				block.Hash.String(),
-				deposit.Data,
-			)
-			if err != nil {
-				return err
+		if len(block.ProvenWithdrawals) > 0 {
+			for _, wd := range block.ProvenWithdrawals {
+				_, err = tx.Exec(
+					updateProvenWithdrawalStatement,
+					wd.TxHash.String(),
+					wd.LogIndex,
+					wd.WithdrawalHash.String(),
+				)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		if len(block.FinalizedWithdrawals) > 0 {
+			for _, wd := range block.FinalizedWithdrawals {
+				_, err = tx.Exec(
+					updateFinalizedWithdrawalStatement,
+					wd.TxHash.String(),
+					wd.LogIndex,
+					wd.Success,
+					wd.WithdrawalHash.String(),
+				)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -249,9 +287,9 @@ func (d *Database) AddIndexedL2Block(block *IndexedL2Block) error {
 
 	const insertWithdrawalStatement = `
 	INSERT INTO withdrawals
-		(guid, from_address, to_address, l1_token, l2_token, amount, tx_hash, log_index, block_hash, data)
+		(guid, from_address, to_address, l1_token, l2_token, amount, tx_hash, log_index, block_hash, data, br_withdrawal_hash)
 	VALUES
-		($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`
 	return txn(d.db, func(tx *sql.Tx) error {
 		_, err := tx.Exec(
@@ -282,6 +320,7 @@ func (d *Database) AddIndexedL2Block(block *IndexedL2Block) error {
 				withdrawal.LogIndex,
 				block.Hash.String(),
 				withdrawal.Data,
+				nullableHash(withdrawal.BedrockHash),
 			)
 			if err != nil {
 				return err
@@ -458,19 +497,22 @@ func (d *Database) GetWithdrawalBatch(hash common.Hash) (*StateBatchJSON, error)
 
 // GetWithdrawalsByAddress returns the list of Withdrawals indexed for the given
 // address paginated by the given params.
-func (d *Database) GetWithdrawalsByAddress(address common.Address, page PaginationParam) (*PaginatedWithdrawals, error) {
-	const selectWithdrawalsStatement = `
+func (d *Database) GetWithdrawalsByAddress(address common.Address, page PaginationParam, state FinalizationState) (*PaginatedWithdrawals, error) {
+	selectWithdrawalsStatement := fmt.Sprintf(`
 	SELECT
 	    withdrawals.guid, withdrawals.from_address, withdrawals.to_address,
 		withdrawals.amount, withdrawals.tx_hash, withdrawals.data,
 		withdrawals.l1_token, withdrawals.l2_token,
 		l2_tokens.name, l2_tokens.symbol, l2_tokens.decimals,
-		l2_blocks.number, l2_blocks.timestamp
+		l2_blocks.number, l2_blocks.timestamp, withdrawals.br_withdrawal_hash,
+		withdrawals.br_withdrawal_proven_tx_hash, withdrawals.br_withdrawal_proven_log_index,
+		withdrawals.br_withdrawal_finalized_tx_hash, withdrawals.br_withdrawal_finalized_log_index,
+		withdrawals.br_withdrawal_finalized_success
 	FROM withdrawals
 		INNER JOIN l2_blocks ON withdrawals.block_hash=l2_blocks.hash
 		INNER JOIN l2_tokens ON withdrawals.l2_token=l2_tokens.address
-	WHERE withdrawals.from_address = $1 ORDER BY l2_blocks.timestamp LIMIT $2 OFFSET $3;
-	`
+	WHERE withdrawals.from_address = $1 %s ORDER BY l2_blocks.timestamp LIMIT $2 OFFSET $3;
+	`, state.SQL())
 	var withdrawals []WithdrawalJSON
 
 	err := txn(d.db, func(tx *sql.Tx) error {
@@ -483,16 +525,44 @@ func (d *Database) GetWithdrawalsByAddress(address common.Address, page Paginati
 		for rows.Next() {
 			var withdrawal WithdrawalJSON
 			var l2Token Token
+			var wdHash sql.NullString
+			var proveTxHash sql.NullString
+			var proveLogIndex sql.NullInt32
+			var finTxHash sql.NullString
+			var finLogIndex sql.NullInt32
+			var finSuccess sql.NullBool
 			if err := rows.Scan(
 				&withdrawal.GUID, &withdrawal.FromAddress, &withdrawal.ToAddress,
 				&withdrawal.Amount, &withdrawal.TxHash, &withdrawal.Data,
 				&withdrawal.L1Token, &l2Token.Address,
 				&l2Token.Name, &l2Token.Symbol, &l2Token.Decimals,
 				&withdrawal.BlockNumber, &withdrawal.BlockTimestamp,
+				&wdHash, &proveTxHash, &proveLogIndex,
+				&finTxHash, &finLogIndex, &finSuccess,
 			); err != nil {
 				return err
 			}
 			withdrawal.L2Token = &l2Token
+			if wdHash.Valid {
+				withdrawal.BedrockWithdrawalHash = &wdHash.String
+			}
+			if proveTxHash.Valid {
+				withdrawal.BedrockProvenTxHash = &proveTxHash.String
+			}
+			if proveLogIndex.Valid {
+				idx := int(proveLogIndex.Int32)
+				withdrawal.BedrockProvenLogIndex = &idx
+			}
+			if finTxHash.Valid {
+				withdrawal.BedrockFinalizedTxHash = &finTxHash.String
+			}
+			if finLogIndex.Valid {
+				idx := int(finLogIndex.Int32)
+				withdrawal.BedrockFinalizedLogIndex = &idx
+			}
+			if finSuccess.Valid {
+				withdrawal.BedrockFinalizedSuccess = &finSuccess.Bool
+			}
 			withdrawals = append(withdrawals, withdrawal)
 		}
 
@@ -671,7 +741,7 @@ WHERE address = $1
 func (d *Database) GetAirdrop(address common.Address) (*Airdrop, error) {
 	row := d.db.QueryRow(getAirdropQuery, strings.ToLower(address.String()))
 	if row.Err() != nil {
-		return nil, fmt.Errorf("error getting airdrop: %v", row.Err())
+		return nil, fmt.Errorf("error getting airdrop: %w", row.Err())
 	}
 
 	airdrop := new(Airdrop)
@@ -690,7 +760,16 @@ func (d *Database) GetAirdrop(address common.Address) (*Airdrop, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("error scanning airdrop: %v", err)
+		return nil, fmt.Errorf("error scanning airdrop: %w", err)
 	}
 	return airdrop, nil
+}
+
+func nullableHash(in *common.Hash) *string {
+	if in == nil {
+		return nil
+	}
+
+	out := in.String()
+	return &out
 }

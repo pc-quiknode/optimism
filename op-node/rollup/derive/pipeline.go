@@ -5,52 +5,54 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/ethereum/go-ethereum/log"
+
 	"github.com/ethereum-optimism/optimism/op-node/eth"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/ethereum/go-ethereum/log"
 )
 
+type Metrics interface {
+	RecordL1Ref(name string, ref eth.L1BlockRef)
+	RecordL2Ref(name string, ref eth.L2BlockRef)
+	RecordUnsafePayloadsBuffer(length uint64, memSize uint64, next eth.BlockID)
+}
+
 type L1Fetcher interface {
+	L1BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L1BlockRef, error)
 	L1BlockRefByNumberFetcher
 	L1BlockRefByHashFetcher
 	L1ReceiptsFetcher
 	L1TransactionFetcher
 }
 
-type StageProgress interface {
-	Progress() Progress
+// ResettableEngineControl wraps EngineControl with reset-functionality,
+// which handles reorgs like the derivation pipeline:
+// by determining the last valid block references to continue from.
+type ResettableEngineControl interface {
+	EngineControl
+	Reset()
 }
 
-type Stage interface {
-	StageProgress
-
-	// Step tries to progress the state.
-	// The outer stage progress informs the step what to do.
-	//
-	// If the stage:
-	// - returns EOF: the stage will be skipped
-	// - returns another error: the stage will make the pipeline error.
-	// - returns nil: the stage will be repeated next Step
-	Step(ctx context.Context, outer Progress) error
-
-	// ResetStep prepares the state for usage in regular steps.
-	// Similar to Step(ctx) it returns:
-	// - EOF if the next stage should be reset
-	// - error if the reset should start all over again
-	// - nil if the reset should continue resetting this stage.
-	ResetStep(ctx context.Context, l1Fetcher L1Fetcher) error
+type ResetableStage interface {
+	// Reset resets a pull stage. `base` refers to the L1 Block Reference to reset to, with corresponding configuration.
+	Reset(ctx context.Context, base eth.L1BlockRef, baseCfg eth.SystemConfig) error
 }
 
 type EngineQueueStage interface {
+	EngineControl
+
+	FinalizedL1() eth.L1BlockRef
 	Finalized() eth.L2BlockRef
 	UnsafeL2Head() eth.L2BlockRef
 	SafeL2Head() eth.L2BlockRef
-	Progress() Progress
+	Origin() eth.L1BlockRef
+	SystemConfig() eth.SystemConfig
 	SetUnsafeHead(head eth.L2BlockRef)
 
-	Finalize(l1Origin eth.BlockID)
-	AddSafeAttributes(attributes *eth.PayloadAttributes)
+	Finalize(l1Origin eth.L1BlockRef)
 	AddUnsafePayload(payload *eth.ExecutionPayload)
+	GetUnsafeQueueGap(expectedNumber uint64) (uint64, uint64)
+	Step(context.Context) error
 }
 
 // DerivationPipeline is updated with new L1 data, and the Step() function can be iterated on to keep the L2 Engine in sync.
@@ -62,36 +64,46 @@ type DerivationPipeline struct {
 	// Index of the stage that is currently being reset.
 	// >= len(stages) if no additional resetting is required
 	resetting int
+	stages    []ResetableStage
 
-	// Index of the stage that is currently being processed.
-	active int
+	// Special stages to keep track of
+	traversal *L1Traversal
+	eng       EngineQueueStage
 
-	// stages in execution order. A stage Step that:
-	stages []Stage
-
-	eng EngineQueueStage
+	metrics Metrics
 }
 
 // NewDerivationPipeline creates a derivation pipeline, which should be reset before use.
-func NewDerivationPipeline(log log.Logger, cfg *rollup.Config, l1Fetcher L1Fetcher, engine Engine) *DerivationPipeline {
-	eng := NewEngineQueue(log, cfg, engine)
-	attributesQueue := NewAttributesQueue(log, cfg, l1Fetcher, eng)
-	batchQueue := NewBatchQueue(log, cfg, l1Fetcher, attributesQueue)
-	chInReader := NewChannelInReader(log, batchQueue)
-	bank := NewChannelBank(log, cfg, chInReader)
-	dataSrc := NewCalldataSource(log, cfg, l1Fetcher)
-	l1Src := NewL1Retrieval(log, dataSrc, bank)
-	l1Traversal := NewL1Traversal(log, l1Fetcher, l1Src)
-	stages := []Stage{eng, attributesQueue, batchQueue, chInReader, bank, l1Src, l1Traversal}
+func NewDerivationPipeline(log log.Logger, cfg *rollup.Config, l1Fetcher L1Fetcher, engine Engine, metrics Metrics) *DerivationPipeline {
+
+	// Pull stages
+	l1Traversal := NewL1Traversal(log, cfg, l1Fetcher)
+	dataSrc := NewDataSourceFactory(log, cfg, l1Fetcher) // auxiliary stage for L1Retrieval
+	l1Src := NewL1Retrieval(log, dataSrc, l1Traversal)
+	frameQueue := NewFrameQueue(log, l1Src)
+	bank := NewChannelBank(log, cfg, frameQueue, l1Fetcher)
+	chInReader := NewChannelInReader(log, bank)
+	batchQueue := NewBatchQueue(log, cfg, chInReader)
+	attrBuilder := NewFetchingAttributesBuilder(cfg, l1Fetcher, engine)
+	attributesQueue := NewAttributesQueue(log, cfg, attrBuilder, batchQueue)
+
+	// Step stages
+	eng := NewEngineQueue(log, cfg, engine, metrics, attributesQueue, l1Fetcher)
+
+	// Reset from engine queue then up from L1 Traversal. The stages do not talk to each other during
+	// the reset, but after the engine queue, this is the order in which the stages could talk to each other.
+	// Note: The engine queue stage is the only reset that can fail.
+	stages := []ResetableStage{eng, l1Traversal, l1Src, frameQueue, bank, chInReader, batchQueue, attributesQueue}
 
 	return &DerivationPipeline{
 		log:       log,
 		cfg:       cfg,
 		l1Fetcher: l1Fetcher,
 		resetting: 0,
-		active:    0,
 		stages:    stages,
 		eng:       eng,
+		metrics:   metrics,
+		traversal: l1Traversal,
 	}
 }
 
@@ -99,12 +111,20 @@ func (dp *DerivationPipeline) Reset() {
 	dp.resetting = 0
 }
 
-func (dp *DerivationPipeline) Progress() Progress {
-	return dp.eng.Progress()
+// Origin is the L1 block of the inner-most stage of the derivation pipeline,
+// i.e. the L1 chain up to and including this point included and/or produced all the safe L2 blocks.
+func (dp *DerivationPipeline) Origin() eth.L1BlockRef {
+	return dp.eng.Origin()
 }
 
-func (dp *DerivationPipeline) Finalize(l1Origin eth.BlockID) {
+func (dp *DerivationPipeline) Finalize(l1Origin eth.L1BlockRef) {
 	dp.eng.Finalize(l1Origin)
+}
+
+// FinalizedL1 is the L1 finalization of the inner-most stage of the derivation pipeline,
+// i.e. the L1 chain up to and including this point included and/or produced all the finalized L2 blocks.
+func (dp *DerivationPipeline) FinalizedL1() eth.L1BlockRef {
+	return dp.eng.FinalizedL1()
 }
 
 func (dp *DerivationPipeline) Finalized() eth.L2BlockRef {
@@ -120,13 +140,31 @@ func (dp *DerivationPipeline) UnsafeL2Head() eth.L2BlockRef {
 	return dp.eng.UnsafeL2Head()
 }
 
-func (dp *DerivationPipeline) SetUnsafeHead(head eth.L2BlockRef) {
-	dp.eng.SetUnsafeHead(head)
+func (dp *DerivationPipeline) StartPayload(ctx context.Context, parent eth.L2BlockRef, attrs *eth.PayloadAttributes, updateSafe bool) (errType BlockInsertionErrType, err error) {
+	return dp.eng.StartPayload(ctx, parent, attrs, updateSafe)
+}
+
+func (dp *DerivationPipeline) ConfirmPayload(ctx context.Context) (out *eth.ExecutionPayload, errTyp BlockInsertionErrType, err error) {
+	return dp.eng.ConfirmPayload(ctx)
+}
+
+func (dp *DerivationPipeline) CancelPayload(ctx context.Context, force bool) error {
+	return dp.eng.CancelPayload(ctx, force)
+}
+
+func (dp *DerivationPipeline) BuildingPayload() (onto eth.L2BlockRef, id eth.PayloadID, safe bool) {
+	return dp.eng.BuildingPayload()
 }
 
 // AddUnsafePayload schedules an execution payload to be processed, ahead of deriving it from L1
 func (dp *DerivationPipeline) AddUnsafePayload(payload *eth.ExecutionPayload) {
 	dp.eng.AddUnsafePayload(payload)
+}
+
+// GetUnsafeQueueGap retrieves the current [start, end] range of the gap between the tip of the unsafe priority queue and the unsafe head.
+// If there is no gap, the start and end will be 0.
+func (dp *DerivationPipeline) GetUnsafeQueueGap(expectedNumber uint64) (uint64, uint64) {
+	return dp.eng.GetUnsafeQueueGap(expectedNumber)
 }
 
 // Step tries to progress the buffer.
@@ -136,10 +174,12 @@ func (dp *DerivationPipeline) AddUnsafePayload(payload *eth.ExecutionPayload) {
 // An error is expected when the underlying source closes.
 // When Step returns nil, it should be called again, to continue the derivation process.
 func (dp *DerivationPipeline) Step(ctx context.Context) error {
+	defer dp.metrics.RecordL1Ref("l1_derived", dp.Origin())
+
 	// if any stages need to be reset, do that first.
 	if dp.resetting < len(dp.stages) {
-		if err := dp.stages[dp.resetting].ResetStep(ctx, dp.l1Fetcher); err == io.EOF {
-			dp.log.Debug("reset of stage completed", "stage", dp.resetting, "origin", dp.stages[dp.resetting].Progress().Origin)
+		if err := dp.stages[dp.resetting].Reset(ctx, dp.eng.Origin(), dp.eng.SystemConfig()); err == io.EOF {
+			dp.log.Debug("reset of stage completed", "stage", dp.resetting, "origin", dp.eng.Origin())
 			dp.resetting += 1
 			return nil
 		} else if err != nil {
@@ -149,18 +189,13 @@ func (dp *DerivationPipeline) Step(ctx context.Context) error {
 		}
 	}
 
-	for i, stage := range dp.stages {
-		var outer Progress
-		if i+1 < len(dp.stages) {
-			outer = dp.stages[i+1].Progress()
-		}
-		if err := stage.Step(ctx, outer); err == io.EOF {
-			continue
-		} else if err != nil {
-			return fmt.Errorf("stage %d failed: %w", i, err)
-		} else {
-			return nil
-		}
+	// Now step the engine queue. It will pull earlier data as needed.
+	if err := dp.eng.Step(ctx); err == io.EOF {
+		// If every stage has returned io.EOF, try to advance the L1 Origin
+		return dp.traversal.AdvanceL1Block(ctx)
+	} else if err != nil {
+		return fmt.Errorf("engine stage failed: %w", err)
+	} else {
+		return nil
 	}
-	return io.EOF
 }

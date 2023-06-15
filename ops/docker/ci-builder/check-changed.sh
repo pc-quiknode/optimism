@@ -27,6 +27,19 @@ else
 	echoerr "$PR"
 	REF=$(echo "$PR" | jq -r ".base.ref")
 
+	if [ "$REF" = "master" ]; then
+		echoerr "Base ref is master, requiring a total rebuild."
+		echo "TRUE"
+		exit 0
+	fi
+
+	if [ "$REF" = "null" ]; then
+		echoerr "Bad ref, requiring a total rebuild."
+		echo "TRUE"
+		exit 1
+	fi
+
+
 	echoerr "Base Ref:     $REF"
 	echoerr "Base Ref SHA: $(git show-branch --sha1-name "$REF")"
  	echoerr "Curr Ref:     $(git rev-parse --short HEAD)"

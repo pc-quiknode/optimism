@@ -1,5 +1,97 @@
 # @eth-optimism/common-ts
 
+## 0.8.1
+
+### Patch Changes
+
+- fecd42d67: Fix BaseServiceV2 configuration for caseCase options
+
+## 0.8.0
+
+### Minor Changes
+
+- 4ae94b412: Add option to configure body parser
+
+### Patch Changes
+
+- 0e179781b: Fixes a minor bug where the provider name was incorrectly logged when using waitForProvider
+
+## 0.7.1
+
+### Patch Changes
+
+- f04e5db2d: Fix unknown option error in base service v2
+
+## 0.7.0
+
+### Minor Changes
+
+- ab8ec365c: Updates BaseServiceV2 so that options are secret by default. Services will have to explicitly mark options as "public" for those options to be logged and included in the metadata metric.
+- 9b2891852: Refactors BaseServiceV2 slightly, merges standard options with regular options
+
+### Patch Changes
+
+- e23f60f63: Fixes a bug in BaseServiceV2 where options were not being parsed correctly when passed into the constructor rather than via environment variables or command line arguments
+- c6c9c7dbf: Adds a function for waiting for ethers providers
+- ffcee1013: Make logLevel a default option of BaseServiceV2
+- eceb0de1d: Adds new standard options to disable parsing variables from environment and command line.
+
+## 0.6.8
+
+### Patch Changes
+
+- Updated dependencies [c975c9620]
+- Updated dependencies [136ea1785]
+  - @eth-optimism/core-utils@0.12.0
+
+## 0.6.7
+
+### Patch Changes
+
+- Updated dependencies [1e76cdb86]
+  - @eth-optimism/core-utils@0.11.0
+
+## 0.6.6
+
+### Patch Changes
+
+- ce7da914: Minor update to BaseServiceV2 to keep the raw body around when requests are made.
+
+## 0.6.5
+
+### Patch Changes
+
+- 7215f4ce: Bump ethers to 5.7.0 globally
+- d7679ca4: Add source maps
+- Updated dependencies [7215f4ce]
+- Updated dependencies [206f6033]
+  - @eth-optimism/core-utils@0.10.1
+
+## 0.6.4
+
+### Patch Changes
+
+- Updated dependencies [dbfea116]
+  - @eth-optimism/core-utils@0.10.0
+
+## 0.6.3
+
+### Patch Changes
+
+- Updated dependencies [0df744f6]
+- Updated dependencies [8ae39154]
+- Updated dependencies [dac4a9f0]
+  - @eth-optimism/core-utils@0.9.3
+
+## 0.6.2
+
+### Patch Changes
+
+- Updated dependencies [0bf3b9b4]
+- Updated dependencies [8d26459b]
+- Updated dependencies [4477fe9f]
+  - @eth-optimism/core-utils@0.9.2
+
 ## 0.6.1
 
 ### Patch Changes

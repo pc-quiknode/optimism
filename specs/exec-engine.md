@@ -4,18 +4,22 @@
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 **Table of Contents**
 
-- [L2 Execution Engine](#l2-execution-engine)
-  - [Deposited transaction processing](#deposited-transaction-processing)
-    - [Deposited transaction boundaries](#deposited-transaction-boundaries)
-  - [Engine API](#engine-api)
-    - [`engine_forkchoiceUpdatedV1`](#engine_forkchoiceupdatedv1)
-      - [Extended PayloadAttributesV1](#extended-payloadattributesv1)
-    - [`engine_newPayloadV1`](#engine_newpayloadv1)
-    - [`engine_getPayloadV1`](#engine_getpayloadv1)
-  - [Networking](#networking)
-  - [Sync](#sync)
-    - [Happy-path sync](#happy-path-sync)
-    - [Worst-case sync](#worst-case-sync)
+- [Deposited transaction processing](#deposited-transaction-processing)
+  - [Deposited transaction boundaries](#deposited-transaction-boundaries)
+- [Fees](#fees)
+  - [Fee Vaults](#fee-vaults)
+  - [Priority fees (Sequencer Fee Vault)](#priority-fees-sequencer-fee-vault)
+  - [Base fees (Base Fee Vault)](#base-fees-base-fee-vault)
+  - [L1-Cost fees (L1 Fee Vault)](#l1-cost-fees-l1-fee-vault)
+- [Engine API](#engine-api)
+  - [`engine_forkchoiceUpdatedV1`](#engine_forkchoiceupdatedv1)
+    - [Extended PayloadAttributesV1](#extended-payloadattributesv1)
+  - [`engine_newPayloadV1`](#engine_newpayloadv1)
+  - [`engine_getPayloadV1`](#engine_getpayloadv1)
+- [Networking](#networking)
+- [Sync](#sync)
+  - [Happy-path sync](#happy-path-sync)
+  - [Worst-case sync](#worst-case-sync)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -47,10 +51,80 @@ To process deposited transactions safely, the deposits MUST be authenticated fir
 Deposited transactions MUST never be consumed from the transaction pool.
 *The transaction pool can be disabled in a deposits-only rollup*
 
+## Fees
+
+Sequenced transactions (i.e. not applicable to deposits) are charged with 3 types of fees:
+priority fees, base fees, and L1-cost fees.
+
+### Fee Vaults
+
+The three types of fees are collected in 3 distinct L2 fee-vault deployments for accounting purposes:
+fee payments are not registered as internal EVM calls, and thus distinguished better this way.
+
+These are hardcoded addresses, pointing at pre-deployed proxy contracts.
+The proxies are backed by vault contract deployments, based on `FeeVault`, to route vault funds to L1 securely.
+
+| Vault Name          | Predeploy                                                |
+|---------------------|----------------------------------------------------------|
+| Sequencer Fee Vault | [`SequencerFeeVault`](./predeploys.md#SequencerFeeVault) |
+| Base Fee Vault      | [`BaseFeeVault`](./predeploys.md#BaseFeeVault)           |
+| L1 Fee Vault        | [`L1FeeVault`](./predeploys.md#L1FeeVault)               |
+
+### Priority fees (Sequencer Fee Vault)
+
+Priority fees follow the [eip-1559] specification, and are collected by the fee-recipient of the L2 block.
+The block fee-recipient (a.k.a. coinbase address) is set to the Sequencer Fee Vault address.
+
+### Base fees (Base Fee Vault)
+
+Base fees largely follow the [eip-1559] specification, with the exception that base fees are not burned,
+but add up to the Base Fee Vault ETH account balance.
+
+### L1-Cost fees (L1 Fee Vault)
+
+The protocol funds batch-submission of sequenced L2 transactions by charging L2 users an additional fee
+based on the estimated batch-submission costs.
+This fee is charged from the L2 transaction-sender ETH balance, and collected into the L1 Fee Vault.
+
+The exact L1 cost function to determine the L1-cost fee component of a L2 transaction is calculated as:
+`(rollupDataGas + l1FeeOverhead) * l1Basefee * l1FeeScalar / 1000000`
+(big-int computation, result in Wei and `uint256` range)
+Where:
+
+- `rollupDataGas` is determined from the *full* encoded transaction
+  (standard EIP-2718 transaction encoding, including signature fields):
+  - Before Regolith fork: `rollupDataGas = zeroes * 4 + (ones + 68) * 16`
+    - The addition of `68` non-zero bytes is a remnant of a pre-Bedrock L1-cost accounting function,
+       which accounted for the worst-case non-zero bytes addition to complement unsigned transactions, unlike Bedrock.
+  - With Regolith fork: `rollupDataGas = zeroes * 4 + ones * 16`
+- `l1FeeOverhead` is the Gas Price Oracle `overhead` value.
+- `l1FeeScalar` is the Gas Price Oracle `scalar` value.
+- `l1Basefee` is the L1 Base fee of the latest L1 origin registered in the L2 chain.
+
+Note that the `rollupDataGas` uses the same byte cost accounting as defined in [eip-2028],
+except the full L2 transaction now counts towards the bytes charged in the L1 calldata.
+This behavior matches pre-Bedrock L1-cost estimation of L2 transactions.
+
+Compression, batching, and intrinsic gas costs of the batch transactions are accounted for by the protocol
+with the Gas Price Oracle `overhead` and `scalar` parameters.
+
+The Gas Price Oracle `l1FeeOverhead` and `l1FeeScalar`, as well as the `l1Basefee` of the L1 origin,
+can be accessed in two interchangeable ways:
+
+- read from the deposited L1 attributes (`l1FeeOverhead`, `l1FeeScalar`, `basefee`) of the current L2 block
+- read from the L1 Block Info contract (`0x4200000000000000000000000000000000000015`)
+  - using the respective solidity `uint256`-getter functions (`l1FeeOverhead`, `l1FeeScalar`, `basefee`)
+  - using direct storage-reads:
+    - L1 basefee as big-endian `uint256` in slot `1`
+    - Overhead as big-endian `uint256` in slot `5`
+    - Scalar as big-endian `uint256` in slot `6`
+
 ## Engine API
 
+<!--
 *Note: the [Engine API][l1-api-spec] is in alpha, `v1.0.0-alpha.5`.
 There may be subtle tweaks, beta starts in a few weeks*
+-->
 
 ### `engine_forkchoiceUpdatedV1`
 
@@ -69,8 +143,7 @@ to [`engine_forkchoiceUpdatedV1`][engine_forkchoiceUpdatedV1]: the extended `Pay
 
 #### Extended PayloadAttributesV1
 
-[`PayloadAttributesV1`][PayloadAttributesV1] is extended with a `transactions` field, equivalent to
-the `transactions` field in [`ExecutionPayloadV1`][ExecutionPayloadV1]:
+[`PayloadAttributesV1`][PayloadAttributesV1] is extended to:
 
 ```js
 PayloadAttributesV1: {
@@ -79,6 +152,7 @@ PayloadAttributesV1: {
     suggestedFeeRecipient: DATA (20 bytes)
     transactions: array of DATA
     noTxPool: bool
+    gasLimit: QUANTITY or null
 }
 ```
 
@@ -88,6 +162,7 @@ to a JSON array.
 
 Each item of the `transactions` array is a byte list encoding a transaction: `TransactionType ||
 TransactionPayload` or `LegacyTransaction`, as defined in [EIP-2718][eip-2718].
+This is equivalent to the `transactions` field in [`ExecutionPayloadV1`][ExecutionPayloadV1]
 
 The `transactions` field is optional:
 
@@ -101,6 +176,15 @@ The `noTxPool` is optional as well, and extends the `transactions` meaning:
 - If `false`, the execution engine is free to pack additional transactions from external sources like the tx pool
   into the payload, after any of the `transactions`. This is the default behavior a L1 node implements.
 - If `true`, the execution engine must not change anything about the given list of `transactions`.
+
+If the `transactions` field is present, the engine must execute the transactions in order and return `STATUS_INVALID`
+if there is an error processing the transactions. It must return `STATUS_VALID` if all of the transactions could
+be executed without error. **Note**: The state transition rules have been modified such that deposits will never fail
+so if `engine_forkchoiceUpdatedV1` returns `STATUS_INVALID` it is because a batched transaction is invalid.
+
+The `gasLimit` is optional w.r.t. compatibility with L1, but required when used as rollup.
+This field overrides the gas limit used during block-building.
+If not specified as rollup, a `STATUS_INVALID` is returned.
 
 [rollup-driver]: rollup-node.md
 
@@ -179,6 +263,8 @@ the operation within the engine is the exact same as with L1 (although with an E
 
 [rollup node spec]: rollup-node.md
 
+[eip-1559]: https://eips.ethereum.org/EIPS/eip-1559
+[eip-2028]: https://eips.ethereum.org/EIPS/eip-2028
 [eip-2718]: https://eips.ethereum.org/EIPS/eip-2718
 [eip-2718-transactions]: https://eips.ethereum.org/EIPS/eip-2718#transactions
 [exec-api-data]: https://github.com/ethereum/execution-apis/blob/769c53c94c4e487337ad0edea9ee0dce49c79bfa/src/engine/specification.md#structures

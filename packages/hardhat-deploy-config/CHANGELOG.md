@@ -1,5 +1,29 @@
 # @eth-optimism/hardhat-deploy-config
 
+## 0.2.5
+
+### Patch Changes
+
+- 1d3c749a2: Bumps the version of ts-node used
+
+## 0.2.4
+
+### Patch Changes
+
+- dd5ab8c0: Allow `paths` to be unset in hardhat config
+
+## 0.2.3
+
+### Patch Changes
+
+- 7215f4ce: Bump ethers to 5.7.0 globally
+
+## 0.2.2
+
+### Patch Changes
+
+- 6ce47f38: Support JSON-formatted deploy configs
+
 ## 0.2.1
 
 ### Patch Changes

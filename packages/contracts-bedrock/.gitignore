@@ -4,6 +4,12 @@ cache
 typechain
 coverage.out
 .deps
-deployments
 broadcast
 genesis.json
+src/contract-artifacts.ts
+tmp-artifacts
+deployments/mainnet-forked
+deploy-config/mainnet-forked.json
+test-case-generator/fuzz
+.resource-metering.csv
+scripts/differential-testing/differential-testing

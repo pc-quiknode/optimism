@@ -2,50 +2,54 @@ package derive
 
 import (
 	"context"
+	"encoding/binary"
 	"io"
 	"math/rand"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum-optimism/optimism/op-node/eth"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/testlog"
 	"github.com/ethereum-optimism/optimism/op-node/testutils"
-	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/log"
-	"github.com/stretchr/testify/require"
 )
 
-// fakeBatchQueueOutput fakes the next stage (receive only) for the batch queue
-// It tracks the progress state of the next stage.
-// Upon receiving a batch, relevant characteristic of safeL2Head are immediately advanced.
-type fakeBatchQueueOutput struct {
-	progress   Progress
-	batches    []*BatchData
-	safeL2Head eth.L2BlockRef
+type fakeBatchQueueInput struct {
+	i       int
+	batches []*BatchData
+	errors  []error
+	origin  eth.L1BlockRef
 }
 
-var _ BatchQueueOutput = (*fakeBatchQueueOutput)(nil)
-
-func (f *fakeBatchQueueOutput) AddBatch(batch *BatchData) {
-	f.batches = append(f.batches, batch)
-	// Advance SafeL2Head
-	f.safeL2Head.Time = batch.Timestamp
-	f.safeL2Head.L1Origin.Number = uint64(batch.EpochNum)
+func (f *fakeBatchQueueInput) Origin() eth.L1BlockRef {
+	return f.origin
 }
 
-func (f *fakeBatchQueueOutput) SafeL2Head() eth.L2BlockRef {
-	return f.safeL2Head
+func (f *fakeBatchQueueInput) NextBatch(ctx context.Context) (*BatchData, error) {
+	if f.i >= len(f.batches) {
+		return nil, io.EOF
+	}
+	b := f.batches[f.i]
+	e := f.errors[f.i]
+	f.i += 1
+	return b, e
 }
 
-func (f *fakeBatchQueueOutput) Progress() Progress {
-	return f.progress
+func mockHash(time uint64, layer uint8) common.Hash {
+	hash := common.Hash{31: layer} // indicate L1 or L2
+	binary.LittleEndian.PutUint64(hash[:], time)
+	return hash
 }
 
 func b(timestamp uint64, epoch eth.L1BlockRef) *BatchData {
 	rng := rand.New(rand.NewSource(int64(timestamp)))
 	data := testutils.RandomData(rng, 20)
 	return &BatchData{BatchV1{
+		ParentHash:   mockHash(timestamp-2, 2),
 		Timestamp:    timestamp,
 		EpochNum:     rollup.Epoch(epoch.Number),
 		EpochHash:    epoch.Hash,
@@ -55,9 +59,9 @@ func b(timestamp uint64, epoch eth.L1BlockRef) *BatchData {
 
 func L1Chain(l1Times []uint64) []eth.L1BlockRef {
 	var out []eth.L1BlockRef
-	var parentHash [32]byte
+	var parentHash common.Hash
 	for i, time := range l1Times {
-		hash := [32]byte{byte(i)}
+		hash := mockHash(time, 1)
 		out = append(out, eth.L1BlockRef{
 			Hash:       hash,
 			Number:     uint64(i),
@@ -69,25 +73,78 @@ func L1Chain(l1Times []uint64) []eth.L1BlockRef {
 	return out
 }
 
-type fakeL1Fetcher struct {
-	l1 []eth.L1BlockRef
-}
-
-func (f *fakeL1Fetcher) L1BlockRefByNumber(_ context.Context, n uint64) (eth.L1BlockRef, error) {
-	if n >= uint64(len(f.l1)) {
-		return eth.L1BlockRef{}, ethereum.NotFound
+// TestBatchQueueNewOrigin tests that the batch queue properly saves the new origin
+// when the safehead's origin is ahead of the pipeline's origin (as is after a reset).
+// This issue was fixed in https://github.com/ethereum-optimism/optimism/pull/3694
+func TestBatchQueueNewOrigin(t *testing.T) {
+	log := testlog.Logger(t, log.LvlCrit)
+	l1 := L1Chain([]uint64{10, 15, 20, 25})
+	safeHead := eth.L2BlockRef{
+		Hash:           mockHash(10, 2),
+		Number:         0,
+		ParentHash:     common.Hash{},
+		Time:           20,
+		L1Origin:       l1[2].ID(),
+		SequenceNumber: 0,
 	}
-	return f.l1[int(n)], nil
+	cfg := &rollup.Config{
+		Genesis: rollup.Genesis{
+			L2Time: 10,
+		},
+		BlockTime:         2,
+		MaxSequencerDrift: 600,
+		SeqWindowSize:     2,
+	}
+
+	input := &fakeBatchQueueInput{
+		batches: []*BatchData{nil},
+		errors:  []error{io.EOF},
+		origin:  l1[0],
+	}
+
+	bq := NewBatchQueue(log, cfg, input)
+	_ = bq.Reset(context.Background(), l1[0], eth.SystemConfig{})
+	require.Equal(t, []eth.L1BlockRef{l1[0]}, bq.l1Blocks)
+
+	// Prev Origin: 0; Safehead Origin: 2; Internal Origin: 0
+	// Should return no data but keep the same origin
+	data, err := bq.NextBatch(context.Background(), safeHead)
+	require.Nil(t, data)
+	require.Equal(t, io.EOF, err)
+	require.Equal(t, []eth.L1BlockRef{l1[0]}, bq.l1Blocks)
+	require.Equal(t, l1[0], bq.origin)
+
+	// Prev Origin: 1; Safehead Origin: 2; Internal Origin: 0
+	// Should wipe l1blocks + advance internal origin
+	input.origin = l1[1]
+	data, err = bq.NextBatch(context.Background(), safeHead)
+	require.Nil(t, data)
+	require.Equal(t, io.EOF, err)
+	require.Empty(t, bq.l1Blocks)
+	require.Equal(t, l1[1], bq.origin)
+
+	// Prev Origin: 2; Safehead Origin: 2; Internal Origin: 1
+	// Should add to l1Blocks + advance internal origin
+	input.origin = l1[2]
+	data, err = bq.NextBatch(context.Background(), safeHead)
+	require.Nil(t, data)
+	require.Equal(t, io.EOF, err)
+	require.Equal(t, []eth.L1BlockRef{l1[2]}, bq.l1Blocks)
+	require.Equal(t, l1[2], bq.origin)
 }
 
+// TestBatchQueueEager adds a bunch of contiguous batches and asserts that
+// enough calls to `NextBatch` return all of those batches.
 func TestBatchQueueEager(t *testing.T) {
-	log := testlog.Logger(t, log.LvlTrace)
-	next := &fakeBatchQueueOutput{
-		safeL2Head: eth.L2BlockRef{
-			Number:   0,
-			Time:     10,
-			L1Origin: eth.BlockID{Number: 0},
-		},
+	log := testlog.Logger(t, log.LvlCrit)
+	l1 := L1Chain([]uint64{10, 20, 30})
+	safeHead := eth.L2BlockRef{
+		Hash:           mockHash(10, 2),
+		Number:         0,
+		ParentHash:     common.Hash{},
+		Time:           10,
+		L1Origin:       l1[0].ID(),
+		SequenceNumber: 0,
 	}
 	cfg := &rollup.Config{
 		Genesis: rollup.Genesis{
@@ -98,47 +155,46 @@ func TestBatchQueueEager(t *testing.T) {
 		SeqWindowSize:     30,
 	}
 
-	l1 := L1Chain([]uint64{10, 20, 30})
+	batches := []*BatchData{b(12, l1[0]), b(14, l1[0]), b(16, l1[0]), b(18, l1[0]), b(20, l1[0]), b(22, l1[0]), b(24, l1[1]), nil}
+	errors := []error{nil, nil, nil, nil, nil, nil, nil, io.EOF}
 
-	fetcher := fakeL1Fetcher{l1: l1}
-	bq := NewBatchQueue(log, cfg, &fetcher, next)
-
-	prevProgress := Progress{
-		Origin: l1[0],
-		Closed: false,
+	input := &fakeBatchQueueInput{
+		batches: batches,
+		errors:  errors,
+		origin:  l1[0],
 	}
 
-	// Setup progress
-	bq.progress.Closed = true
-	err := bq.Step(context.Background(), prevProgress)
-	require.Nil(t, err)
+	bq := NewBatchQueue(log, cfg, input)
+	_ = bq.Reset(context.Background(), l1[0], eth.SystemConfig{})
+	// Advance the origin
+	input.origin = l1[1]
 
-	// Add batches
-	batches := []*BatchData{b(12, l1[0]), b(14, l1[0])}
-	for _, batch := range batches {
-		err := bq.AddBatch(batch)
-		require.Nil(t, err)
-	}
-	// Step
-	for {
-		if err := bq.Step(context.Background(), prevProgress); err == io.EOF {
-			break
-		} else {
-			require.Nil(t, err)
+	for i := 0; i < len(batches); i++ {
+		b, e := bq.NextBatch(context.Background(), safeHead)
+		require.ErrorIs(t, e, errors[i])
+		require.Equal(t, batches[i], b)
+
+		if b != nil {
+			safeHead.Number += 1
+			safeHead.Time += 2
+			safeHead.Hash = mockHash(b.Timestamp, 2)
+			safeHead.L1Origin = b.Epoch()
 		}
 	}
-	// Verify Output
-	require.Equal(t, batches, next.batches)
 }
 
-func TestBatchQueueFull(t *testing.T) {
+// TestBatchQueueInvalidInternalAdvance asserts that we do not miss an epoch when generating batches.
+// This is a regression test for CLI-3378.
+func TestBatchQueueInvalidInternalAdvance(t *testing.T) {
 	log := testlog.Logger(t, log.LvlTrace)
-	next := &fakeBatchQueueOutput{
-		safeL2Head: eth.L2BlockRef{
-			Number:   0,
-			Time:     10,
-			L1Origin: eth.BlockID{Number: 0},
-		},
+	l1 := L1Chain([]uint64{10, 15, 20, 25, 30})
+	safeHead := eth.L2BlockRef{
+		Hash:           mockHash(10, 2),
+		Number:         0,
+		ParentHash:     common.Hash{},
+		Time:           10,
+		L1Origin:       l1[0].ID(),
+		SequenceNumber: 0,
 	}
 	cfg := &rollup.Config{
 		Genesis: rollup.Genesis{
@@ -149,94 +205,87 @@ func TestBatchQueueFull(t *testing.T) {
 		SeqWindowSize:     2,
 	}
 
-	l1 := L1Chain([]uint64{10, 15, 20})
+	batches := []*BatchData{b(12, l1[0]), b(14, l1[0]), b(16, l1[0]), b(18, l1[0]), b(20, l1[0]), b(22, l1[0]), nil}
+	errors := []error{nil, nil, nil, nil, nil, nil, io.EOF}
 
-	fetcher := fakeL1Fetcher{l1: l1}
-	bq := NewBatchQueue(log, cfg, &fetcher, next)
-
-	// Start with open previous & closed self.
-	// Then this stage is opened at the first step.
-	bq.progress.Closed = true
-	prevProgress := Progress{
-		Origin: l1[0],
-		Closed: false,
+	input := &fakeBatchQueueInput{
+		batches: batches,
+		errors:  errors,
+		origin:  l1[0],
 	}
 
-	// Do the bq open
-	err := bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, false)
+	bq := NewBatchQueue(log, cfg, input)
+	_ = bq.Reset(context.Background(), l1[0], eth.SystemConfig{})
 
-	// Add batches
-	batches := []*BatchData{b(14, l1[0]), b(16, l1[0]), b(18, l1[1])}
-	for _, batch := range batches {
-		err := bq.AddBatch(batch)
-		require.Nil(t, err)
-	}
-	// Missing first batch
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, io.EOF)
+	// Load continuous batches for epoch 0
+	for i := 0; i < len(batches); i++ {
+		b, e := bq.NextBatch(context.Background(), safeHead)
+		require.ErrorIs(t, e, errors[i])
+		require.Equal(t, batches[i], b)
 
-	// Close previous to close bq
-	prevProgress.Closed = true
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, true)
-
-	// Open previous to open bq with the new inclusion block
-	prevProgress.Closed = false
-	prevProgress.Origin = l1[1]
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, false)
-
-	// Close previous to close bq (for epoch 2)
-	prevProgress.Closed = true
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, true)
-
-	// Open previous to open bq with the new inclusion block (epoch 2)
-	prevProgress.Closed = false
-	prevProgress.Origin = l1[2]
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, false)
-
-	// Finally add batch
-	firstBatch := b(12, l1[0])
-	err = bq.AddBatch(firstBatch)
-	require.Equal(t, err, nil)
-
-	// Close the origin
-	prevProgress.Closed = true
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, true)
-
-	// Step, but should have full epoch now
-	for {
-		if err := bq.Step(context.Background(), prevProgress); err == io.EOF {
-			break
-		} else {
-			require.Nil(t, err)
+		if b != nil {
+			safeHead.Number += 1
+			safeHead.Time += 2
+			safeHead.Hash = mockHash(b.Timestamp, 2)
+			safeHead.L1Origin = b.Epoch()
 		}
 	}
-	// Verify Output
-	var final []*BatchData
-	final = append(final, firstBatch)
-	final = append(final, batches...)
-	require.Equal(t, final, next.batches)
+
+	// Advance to origin 1. No forced batches yet.
+	input.origin = l1[1]
+	b, e := bq.NextBatch(context.Background(), safeHead)
+	require.ErrorIs(t, e, io.EOF)
+	require.Nil(t, b)
+
+	// Advance to origin 2. No forced batches yet because we are still on epoch 0
+	// & have batches for epoch 0.
+	input.origin = l1[2]
+	b, e = bq.NextBatch(context.Background(), safeHead)
+	require.ErrorIs(t, e, io.EOF)
+	require.Nil(t, b)
+
+	// Advance to origin 3. Should generate one empty batch.
+	input.origin = l1[3]
+	b, e = bq.NextBatch(context.Background(), safeHead)
+	require.Nil(t, e)
+	require.NotNil(t, b)
+	require.Equal(t, safeHead.Time+2, b.Timestamp)
+	require.Equal(t, rollup.Epoch(1), b.EpochNum)
+	safeHead.Number += 1
+	safeHead.Time += 2
+	safeHead.Hash = mockHash(b.Timestamp, 2)
+	safeHead.L1Origin = b.Epoch()
+	b, e = bq.NextBatch(context.Background(), safeHead)
+	require.ErrorIs(t, e, io.EOF)
+	require.Nil(t, b)
+
+	// Advance to origin 4. Should generate one empty batch.
+	input.origin = l1[4]
+	b, e = bq.NextBatch(context.Background(), safeHead)
+	require.Nil(t, e)
+	require.NotNil(t, b)
+	require.Equal(t, rollup.Epoch(2), b.EpochNum)
+	require.Equal(t, safeHead.Time+2, b.Timestamp)
+	safeHead.Number += 1
+	safeHead.Time += 2
+	safeHead.Hash = mockHash(b.Timestamp, 2)
+	safeHead.L1Origin = b.Epoch()
+	b, e = bq.NextBatch(context.Background(), safeHead)
+	require.ErrorIs(t, e, io.EOF)
+	require.Nil(t, b)
+
 }
 
 func TestBatchQueueMissing(t *testing.T) {
-	log := testlog.Logger(t, log.LvlTrace)
-	next := &fakeBatchQueueOutput{
-		safeL2Head: eth.L2BlockRef{
-			Number:   0,
-			Time:     10,
-			L1Origin: eth.BlockID{Number: 0},
-		},
+	log := testlog.Logger(t, log.LvlCrit)
+	l1 := L1Chain([]uint64{10, 15, 20, 25})
+	safeHead := eth.L2BlockRef{
+		Hash:           mockHash(10, 2),
+		Number:         0,
+		ParentHash:     common.Hash{},
+		Time:           10,
+		L1Origin:       l1[0].ID(),
+		SequenceNumber: 0,
 	}
 	cfg := &rollup.Config{
 		Genesis: rollup.Genesis{
@@ -247,77 +296,77 @@ func TestBatchQueueMissing(t *testing.T) {
 		SeqWindowSize:     2,
 	}
 
-	l1 := L1Chain([]uint64{10, 15, 20})
+	// The batches at 18 and 20 are skipped to stop 22 from being eagerly processed.
+	// This test checks that batch timestamp 12 & 14 are created, 16 is used, and 18 is advancing the epoch.
+	// Due to the large sequencer time drift 16 is perfectly valid to have epoch 0 as origin.
+	batches := []*BatchData{b(16, l1[0]), b(22, l1[1])}
+	errors := []error{nil, nil}
 
-	fetcher := fakeL1Fetcher{l1: l1}
-	bq := NewBatchQueue(log, cfg, &fetcher, next)
-
-	// Start with open previous & closed self.
-	// Then this stage is opened at the first step.
-	bq.progress.Closed = true
-	prevProgress := Progress{
-		Origin: l1[0],
-		Closed: false,
+	input := &fakeBatchQueueInput{
+		batches: batches,
+		errors:  errors,
+		origin:  l1[0],
 	}
 
-	// Do the bq open
-	err := bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, false)
+	bq := NewBatchQueue(log, cfg, input)
+	_ = bq.Reset(context.Background(), l1[0], eth.SystemConfig{})
 
-	// Add batches
-	// NB: The batch at 18 is skipped to skip over the ability to
-	// do eager batch processing for that batch. This test checks
-	// that batch timestamp 12 & 14 is created & 16 is used.
-	batches := []*BatchData{b(16, l1[0]), b(20, l1[1])}
-	for _, batch := range batches {
-		err := bq.AddBatch(batch)
-		require.Nil(t, err)
+	for i := 0; i < len(batches); i++ {
+		b, e := bq.NextBatch(context.Background(), safeHead)
+		require.ErrorIs(t, e, NotEnoughData)
+		require.Nil(t, b)
 	}
-	// Missing first batch
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, io.EOF)
 
-	// Close previous to close bq
-	prevProgress.Closed = true
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, true)
+	// advance origin. Underlying stage still has no more batches
+	// This is not enough to auto advance yet
+	input.origin = l1[1]
+	b, e := bq.NextBatch(context.Background(), safeHead)
+	require.ErrorIs(t, e, io.EOF)
+	require.Nil(t, b)
 
-	// Open previous to open bq with the new inclusion block
-	prevProgress.Closed = false
-	prevProgress.Origin = l1[1]
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, false)
+	// Advance the origin. At this point batch timestamps 12 and 14 will be created
+	input.origin = l1[2]
 
-	// Close previous to close bq (for epoch 2)
-	prevProgress.Closed = true
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, true)
+	// Check for a generated batch at t = 12
+	b, e = bq.NextBatch(context.Background(), safeHead)
+	require.Nil(t, e)
+	require.Equal(t, b.Timestamp, uint64(12))
+	require.Empty(t, b.BatchV1.Transactions)
+	require.Equal(t, rollup.Epoch(0), b.EpochNum)
+	safeHead.Number += 1
+	safeHead.Time += 2
+	safeHead.Hash = mockHash(b.Timestamp, 2)
 
-	// Open previous to open bq with the new inclusion block (epoch 2)
-	prevProgress.Closed = false
-	prevProgress.Origin = l1[2]
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, false)
+	// Check for generated batch at t = 14
+	b, e = bq.NextBatch(context.Background(), safeHead)
+	require.Nil(t, e)
+	require.Equal(t, b.Timestamp, uint64(14))
+	require.Empty(t, b.BatchV1.Transactions)
+	require.Equal(t, rollup.Epoch(0), b.EpochNum)
+	safeHead.Number += 1
+	safeHead.Time += 2
+	safeHead.Hash = mockHash(b.Timestamp, 2)
 
-	// Close the origin
-	prevProgress.Closed = true
-	err = bq.Step(context.Background(), prevProgress)
-	require.Equal(t, err, nil)
-	require.Equal(t, bq.progress.Closed, true)
+	// Check for the inputted batch at t = 16
+	b, e = bq.NextBatch(context.Background(), safeHead)
+	require.Nil(t, e)
+	require.Equal(t, b, batches[0])
+	require.Equal(t, rollup.Epoch(0), b.EpochNum)
+	safeHead.Number += 1
+	safeHead.Time += 2
+	safeHead.Hash = mockHash(b.Timestamp, 2)
 
-	// Step, but should have full epoch now + fill missing
-	for {
-		if err := bq.Step(context.Background(), prevProgress); err == io.EOF {
-			break
-		} else {
-			require.Nil(t, err)
-		}
-	}
-	// TODO: Maybe check actuall batch validity better
-	require.Equal(t, 3, len(next.batches))
+	// Advance the origin. At this point the batch with timestamp 18 will be created
+	input.origin = l1[3]
+
+	// Check for the generated batch at t = 18. This batch advances the epoch
+	// Note: We need one io.EOF returned from the bq that advances the internal L1 Blocks view
+	// before the batch will be auto generated
+	_, e = bq.NextBatch(context.Background(), safeHead)
+	require.Equal(t, e, io.EOF)
+	b, e = bq.NextBatch(context.Background(), safeHead)
+	require.Nil(t, e)
+	require.Equal(t, b.Timestamp, uint64(18))
+	require.Empty(t, b.BatchV1.Transactions)
+	require.Equal(t, rollup.Epoch(1), b.EpochNum)
 }

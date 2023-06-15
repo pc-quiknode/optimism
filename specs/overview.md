@@ -4,19 +4,18 @@
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 **Table of Contents**
 
-- [Optimism Overview](#optimism-overview)
-  - [Architecture Design Goals](#architecture-design-goals)
-  - [Components](#components)
-    - [L1 Components](#l1-components)
-    - [L2 Components](#l2-components)
-    - [Transaction/Block Propagation](#transactionblock-propagation)
-  - [Key Interactions In Depth](#key-interactions-in-depth)
-    - [Deposits](#deposits)
-    - [Block Derivation](#block-derivation)
-      - [Overview](#overview)
-      - [Epochs and the Sequencing Window](#epochs-and-the-sequencing-window)
-      - [Block Derivation Loop](#block-derivation-loop)
-    - [Engine API](#engine-api)
+- [Architecture Design Goals](#architecture-design-goals)
+- [Components](#components)
+  - [L1 Components](#l1-components)
+  - [L2 Components](#l2-components)
+  - [Transaction/Block Propagation](#transactionblock-propagation)
+- [Key Interactions In Depth](#key-interactions-in-depth)
+  - [Deposits](#deposits)
+  - [Block Derivation](#block-derivation)
+    - [Overview](#overview)
+    - [Epochs and the Sequencing Window](#epochs-and-the-sequencing-window)
+    - [Block Derivation Loop](#block-derivation-loop)
+  - [Engine API](#engine-api)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -27,7 +26,7 @@ This document assumes you've read the [introduction](./introduction.md).
 
 ## Architecture Design Goals
 
-- **Execution-Level EVM Equivalence:** The developer experience should be identical to L2 except where L2 introduces a
+- **Execution-Level EVM Equivalence:** The developer experience should be identical to L1 except where L2 introduces a
 fundamental difference.
   - No special compiler.
   - No unexpected gas costs.
@@ -86,7 +85,7 @@ and fault proofs.
 
 **Spec links:**
 
-- [Execution Engine](specs/exec-engine.md)
+- [Execution Engine](./exec-engine.md)
 
 Since the EE uses Geth under the hood, Optimism uses Geth's built-in peer-to-peer network and transaction pool to
 propagate transactions. The same network can also be used to propagate submitted blocks and support snap-sync.
@@ -136,8 +135,9 @@ Optimism's block derivation function is designed such that it:
 #### Epochs and the Sequencing Window
 
 The rollup chain is subdivided into epochs. There is a 1:1 correspondence between L1 block numbers and epoch numbers.
-For L1 block number `n`, there is a corresponding rollup epoch `n` which can only be derived a "sequencing windows" has
-passed, i.e. after L1 block number `n + SEQUENCING_WINDOW_SIZE` is added to the L1 chain.
+
+For L1 block number `n`, there is a corresponding rollup epoch `n` which can only be derived after a _sequencing window_
+worth of blocks has passed, i.e. after L1 block number `n + SEQUENCING_WINDOW_SIZE` is added to the L1 chain.
 
 Each epoch contains at least one block. Every block in the epoch contains an L1 info transaction which contains
 contextual information about L1 such as the block hash and timestamp. The first block in the epoch also contains all

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.10;
+pragma solidity 0.8.15;
 
 import { Semver } from "../universal/Semver.sol";
 
@@ -44,9 +44,25 @@ contract L1Block is Semver {
     uint64 public sequenceNumber;
 
     /**
-     * @custom:semver 0.0.1
+     * @notice The versioned hash to authenticate the batcher by.
      */
-    constructor() Semver(0, 0, 1) {}
+    bytes32 public batcherHash;
+
+    /**
+     * @notice The overhead value applied to the L1 portion of the transaction
+     *         fee.
+     */
+    uint256 public l1FeeOverhead;
+
+    /**
+     * @notice The scalar value applied to the L1 portion of the transaction fee.
+     */
+    uint256 public l1FeeScalar;
+
+    /**
+     * @custom:semver 1.0.0
+     */
+    constructor() Semver(1, 0, 0) {}
 
     /**
      * @notice Updates the L1 block values.
@@ -56,13 +72,19 @@ contract L1Block is Semver {
      * @param _basefee        L1 basefee.
      * @param _hash           L1 blockhash.
      * @param _sequenceNumber Number of L2 blocks since epoch start.
+     * @param _batcherHash    Versioned hash to authenticate batcher by.
+     * @param _l1FeeOverhead  L1 fee overhead.
+     * @param _l1FeeScalar    L1 fee scalar.
      */
     function setL1BlockValues(
         uint64 _number,
         uint64 _timestamp,
         uint256 _basefee,
         bytes32 _hash,
-        uint64 _sequenceNumber
+        uint64 _sequenceNumber,
+        bytes32 _batcherHash,
+        uint256 _l1FeeOverhead,
+        uint256 _l1FeeScalar
     ) external {
         require(
             msg.sender == DEPOSITOR_ACCOUNT,
@@ -74,5 +96,8 @@ contract L1Block is Semver {
         basefee = _basefee;
         hash = _hash;
         sequenceNumber = _sequenceNumber;
+        batcherHash = _batcherHash;
+        l1FeeOverhead = _l1FeeOverhead;
+        l1FeeScalar = _l1FeeScalar;
     }
 }

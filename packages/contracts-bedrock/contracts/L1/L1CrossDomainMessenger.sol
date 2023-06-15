@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity 0.8.15;
 
-import { PredeployAddresses } from "../libraries/PredeployAddresses.sol";
+import { Predeploys } from "../libraries/Predeploys.sol";
 import { OptimismPortal } from "./OptimismPortal.sol";
 import { CrossDomainMessenger } from "../universal/CrossDomainMessenger.sol";
 import { Semver } from "../universal/Semver.sol";
@@ -17,15 +17,18 @@ contract L1CrossDomainMessenger is CrossDomainMessenger, Semver {
     /**
      * @notice Address of the OptimismPortal.
      */
-    OptimismPortal public immutable portal;
+    OptimismPortal public immutable PORTAL;
 
     /**
-     * @custom:semver 0.0.1
+     * @custom:semver 1.1.0
      *
      * @param _portal Address of the OptimismPortal contract on this network.
      */
-    constructor(OptimismPortal _portal) Semver(0, 0, 1) {
-        portal = _portal;
+    constructor(OptimismPortal _portal)
+        Semver(1, 1, 0)
+        CrossDomainMessenger(Predeploys.L2_CROSS_DOMAIN_MESSENGER)
+    {
+        PORTAL = _portal;
         initialize();
     }
 
@@ -33,30 +36,11 @@ contract L1CrossDomainMessenger is CrossDomainMessenger, Semver {
      * @notice Initializer.
      */
     function initialize() public initializer {
-        address[] memory blockedSystemAddresses = new address[](1);
-        blockedSystemAddresses[0] = address(this);
-        __CrossDomainMessenger_init(
-            PredeployAddresses.L2_CROSS_DOMAIN_MESSENGER,
-            blockedSystemAddresses
-        );
+        __CrossDomainMessenger_init();
     }
 
     /**
-     * @notice Checks whether the message being sent from the other messenger.
-     *
-     * @return True if the message was sent from the messenger, false otherwise.
-     */
-    function _isOtherMessenger() internal view override returns (bool) {
-        return msg.sender == address(portal) && portal.l2Sender() == otherMessenger;
-    }
-
-    /**
-     * @notice Sends a message via the OptimismPortal contract.
-     *
-     * @param _to       Address of the recipient on L2.
-     * @param _gasLimit Minimum gas limit that the message can be executed with.
-     * @param _value    ETH value to attach to the message and send to the recipient.
-     * @param _data     Data to attach to the message and call the recipient with.
+     * @inheritdoc CrossDomainMessenger
      */
     function _sendMessage(
         address _to,
@@ -64,6 +48,20 @@ contract L1CrossDomainMessenger is CrossDomainMessenger, Semver {
         uint256 _value,
         bytes memory _data
     ) internal override {
-        portal.depositTransaction{ value: _value }(_to, _value, _gasLimit, false, _data);
+        PORTAL.depositTransaction{ value: _value }(_to, _value, _gasLimit, false, _data);
+    }
+
+    /**
+     * @inheritdoc CrossDomainMessenger
+     */
+    function _isOtherMessenger() internal view override returns (bool) {
+        return msg.sender == address(PORTAL) && PORTAL.l2Sender() == OTHER_MESSENGER;
+    }
+
+    /**
+     * @inheritdoc CrossDomainMessenger
+     */
+    function _isUnsafeTarget(address _target) internal view override returns (bool) {
+        return _target == address(this) || _target == address(PORTAL);
     }
 }

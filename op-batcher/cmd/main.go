@@ -4,28 +4,22 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/urfave/cli"
 
-	batcher "github.com/ethereum-optimism/optimism/op-batcher"
+	"github.com/ethereum-optimism/optimism/op-batcher/batcher"
 	"github.com/ethereum-optimism/optimism/op-batcher/flags"
+	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 var (
-	Version   = ""
+	Version   = "v0.10.14"
 	GitCommit = ""
 	GitDate   = ""
 )
 
 func main() {
-	// Set up logger with a default INFO level in case we fail to parse flags,
-	// otherwise the final critical log won't show what the parsing error was.
-	log.Root().SetHandler(
-		log.LvlFilterHandler(
-			log.LvlInfo,
-			log.StreamHandler(os.Stdout, log.TerminalFormat(true)),
-		),
-	)
+	oplog.SetupDefaults()
 
 	app := cli.NewApp()
 	app.Flags = flags.Flags
@@ -35,9 +29,17 @@ func main() {
 	app.Description = "Service for generating and submitting L2 tx batches " +
 		"to L1"
 
-	app.Action = batcher.Main(Version)
+	app.Action = curryMain(Version)
 	err := app.Run(os.Args)
 	if err != nil {
 		log.Crit("Application failed", "message", err)
+	}
+}
+
+// curryMain transforms the batcher.Main function into an app.Action
+// This is done to capture the Version of the batcher.
+func curryMain(version string) func(ctx *cli.Context) error {
+	return func(ctx *cli.Context) error {
+		return batcher.Main(version, ctx)
 	}
 }

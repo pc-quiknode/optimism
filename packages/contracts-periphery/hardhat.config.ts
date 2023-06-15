@@ -1,3 +1,5 @@
+import assert from 'assert'
+
 import { HardhatUserConfig, subtask } from 'hardhat/config'
 import { TASK_COMPILE_SOLIDITY_GET_SOURCE_PATHS } from 'hardhat/builtin-tasks/task-names'
 import { getenv } from '@eth-optimism/core-utils'
@@ -29,65 +31,114 @@ subtask(TASK_COMPILE_SOLIDITY_GET_SOURCE_PATHS).setAction(
   }
 )
 
+assert(
+  !(getenv('PRIVATE_KEY') && getenv('LEDGER_ADDRESS')),
+  'use only one of PRIVATE_KEY or LEDGER_ADDRESS'
+)
+
+const accounts = getenv('PRIVATE_KEY')
+  ? [getenv('PRIVATE_KEY')]
+  : (undefined as any)
+
 const config: HardhatUserConfig = {
   networks: {
     optimism: {
       chainId: 10,
       url: 'https://mainnet.optimism.io',
+      accounts,
       verify: {
         etherscan: {
           apiKey: getenv('OPTIMISTIC_ETHERSCAN_API_KEY'),
         },
       },
+      companionNetworks: {
+        l1: 'mainnet',
+      },
     },
-    'optimism-kovan': {
-      chainId: 69,
-      url: 'https://kovan.optimism.io',
+    'optimism-goerli': {
+      chainId: 420,
+      url: 'https://goerli.optimism.io',
+      accounts,
       verify: {
         etherscan: {
           apiKey: getenv('OPTIMISTIC_ETHERSCAN_API_KEY'),
         },
       },
+      companionNetworks: {
+        l1: 'goerli',
+      },
     },
-    ethereum: {
+    mainnet: {
       chainId: 1,
       url: `https://mainnet.infura.io/v3/${getenv('INFURA_PROJECT_ID')}`,
+      accounts,
       verify: {
         etherscan: {
           apiKey: getenv('ETHEREUM_ETHERSCAN_API_KEY'),
         },
+      },
+      companionNetworks: {
+        l2: 'optimism',
       },
     },
     goerli: {
       chainId: 5,
       url: `https://goerli.infura.io/v3/${getenv('INFURA_PROJECT_ID')}`,
+      accounts,
       verify: {
         etherscan: {
           apiKey: getenv('ETHEREUM_ETHERSCAN_API_KEY'),
         },
+      },
+      companionNetworks: {
+        l2: 'optimism-goerli',
       },
     },
     ropsten: {
       chainId: 3,
       url: `https://ropsten.infura.io/v3/${getenv('INFURA_PROJECT_ID')}`,
+      accounts,
       verify: {
         etherscan: {
           apiKey: getenv('ETHEREUM_ETHERSCAN_API_KEY'),
         },
       },
     },
-    kovan: {
-      chainId: 42,
-      url: `https://kovan.infura.io/v3/${getenv('INFURA_PROJECT_ID')}`,
-      verify: {
-        etherscan: {
-          apiKey: getenv('ETHEREUM_ETHERSCAN_API_KEY'),
-        },
+    'ops-l2': {
+      chainId: 17,
+      accounts: [
+        '0x3b8d2345102cce2443acb240db6e87c8edd4bb3f821b17fab8ea2c9da08ea132',
+        '0xa6aecc98b63bafb0de3b29ae9964b14acb4086057808be29f90150214ebd4a0f',
+      ],
+      url: 'http://127.0.0.1:8545',
+      companionNetworks: {
+        l1: 'ops-l1',
+      },
+    },
+    'ops-l1': {
+      chainId: 31337,
+      accounts: [
+        '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+      ],
+      url: 'http://127.0.0.1:9545',
+      companionNetworks: {
+        l2: 'ops-l2',
       },
     },
   },
   paths: {
     deployConfig: './config/deploy',
+  },
+  external: {
+    contracts: [
+      {
+        artifacts: '../contracts/artifacts',
+      },
+    ],
+    deployments: {
+      goerli: ['../contracts/deployments/goerli'],
+      mainnet: ['../contracts/deployments/mainnet'],
+    },
   },
   deployConfigSpec: configSpec,
   mocha: {
@@ -100,7 +151,13 @@ const config: HardhatUserConfig = {
   solidity: {
     compilers: [
       {
-        version: '0.8.9',
+        version: '0.8.16',
+        settings: {
+          optimizer: { enabled: true, runs: 10_000 },
+        },
+      },
+      {
+        version: '0.8.15',
         settings: {
           optimizer: { enabled: true, runs: 10_000 },
         },
@@ -119,7 +176,9 @@ const config: HardhatUserConfig = {
   },
   namedAccounts: {
     deployer: {
-      default: `ledger://${getenv('LEDGER_ADDRESS')}`,
+      default: getenv('LEDGER_ADDRESS')
+        ? `ledger://${getenv('LEDGER_ADDRESS')}`
+        : 0,
       hardhat: 0,
     },
   },

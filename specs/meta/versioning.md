@@ -1,12 +1,23 @@
 # Versioning
 
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**
+
+- [Go modules](#go-modules)
+  - [versioning process](#versioning-process)
+- [Typescript](#typescript)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 ## Go modules
 
 Go modules that are currently versioned:
 
 ```text
-./op-batcher
+./op-service
 ./op-bindings
+./op-batcher
 ./op-node
 ./op-proposer
 ./op-e2e
@@ -23,7 +34,6 @@ Go modules which are not yet versioned:
 ./l2geth-exporter  (changesets)
 ./op-exporter      (changesets)
 ./proxyd           (changesets)
-./teleportr        (changesets)
 ./state-surgery
 ```
 

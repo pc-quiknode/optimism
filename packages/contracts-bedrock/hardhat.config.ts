@@ -1,6 +1,6 @@
 import { ethers } from 'ethers'
-import { HardhatUserConfig, task, subtask } from 'hardhat/config'
-import { TASK_COMPILE_SOLIDITY_GET_SOURCE_PATHS } from 'hardhat/builtin-tasks/task-names'
+import { HardhatUserConfig } from 'hardhat/config'
+import dotenv from 'dotenv'
 
 // Hardhat plugins
 import '@eth-optimism/hardhat-deploy-config'
@@ -9,40 +9,86 @@ import '@nomiclabs/hardhat-ethers'
 import 'hardhat-deploy'
 
 // Hardhat tasks
-import './tasks/genesis-l1'
-import './tasks/genesis-l2'
-import './tasks/deposits'
-import './tasks/rekey'
-import './tasks/rollup-config'
+import './tasks'
 
-subtask(TASK_COMPILE_SOLIDITY_GET_SOURCE_PATHS).setAction(
-  async (_, __, runSuper) => {
-    const paths = await runSuper()
+// Deploy configuration
+import { deployConfigSpec } from './src/deploy-config'
 
-    return paths.filter((p: string) => !p.endsWith('.t.sol'))
-  }
-)
-
-task('accounts', 'Prints the list of accounts', async (_, hre) => {
-  const accounts = await hre.ethers.getSigners()
-
-  for (const account of accounts) {
-    console.log(account.address)
-  }
-})
+// Load environment variables
+dotenv.config()
 
 const config: HardhatUserConfig = {
   networks: {
+    hardhat: {
+      live: false,
+    },
+    mainnet: {
+      url: process.env.RPC_URL || 'http://localhost:8545',
+    },
     devnetL1: {
+      live: false,
       url: 'http://localhost:8545',
       accounts: [
         'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
       ],
     },
+    devnetL2: {
+      live: false,
+      url: process.env.RPC_URL || 'http://localhost:9545',
+      accounts: [
+        'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+      ],
+    },
+    hivenet: {
+      chainId: Number(process.env.CHAIN_ID),
+      url: process.env.L1_RPC || '',
+      accounts: [process.env.PRIVATE_KEY_DEPLOYER || ethers.constants.HashZero],
+    },
     goerli: {
       chainId: 5,
       url: process.env.L1_RPC || '',
       accounts: [process.env.PRIVATE_KEY_DEPLOYER || ethers.constants.HashZero],
+    },
+    'alpha-1': {
+      chainId: 5,
+      url: process.env.L1_RPC || '',
+      accounts: [process.env.PRIVATE_KEY_DEPLOYER || ethers.constants.HashZero],
+    },
+    deployer: {
+      chainId: Number(process.env.CHAIN_ID),
+      url: process.env.L1_RPC || '',
+      accounts: [process.env.PRIVATE_KEY_DEPLOYER || ethers.constants.HashZero],
+      live: process.env.VERIFY_CONTRACTS === 'true',
+    },
+    'mainnet-forked': {
+      chainId: 1,
+      url: process.env.L1_RPC || '',
+      accounts: [process.env.PRIVATE_KEY_DEPLOYER || ethers.constants.HashZero],
+      live: false,
+    },
+    'goerli-forked': {
+      chainId: 5,
+      url: process.env.L1_RPC || '',
+      accounts: [process.env.PRIVATE_KEY_DEPLOYER || ethers.constants.HashZero],
+      live: true,
+    },
+    'final-migration-rehearsal': {
+      chainId: 5,
+      url: process.env.L1_RPC || '',
+      accounts: [process.env.PRIVATE_KEY_DEPLOYER || ethers.constants.HashZero],
+      live: true,
+    },
+    'internal-devnet': {
+      chainId: 5,
+      url: process.env.L1_RPC || '',
+      accounts: [process.env.PRIVATE_KEY_DEPLOYER || ethers.constants.HashZero],
+      live: true,
+    },
+    'getting-started': {
+      chainId: 5,
+      url: process.env.L1_RPC || '',
+      accounts: [process.env.PRIVATE_KEY_DEPLOYER || ethers.constants.HashZero],
+      live: true,
     },
   },
   foundry: {
@@ -58,50 +104,40 @@ const config: HardhatUserConfig = {
       default: 0,
     },
   },
-  deployConfigSpec: {
-    submissionInterval: {
-      type: 'number',
-    },
-    l2BlockTime: {
-      type: 'number',
-    },
-    genesisOutput: {
-      type: 'string',
-      default: ethers.constants.HashZero,
-    },
-    historicalBlocks: {
-      type: 'number',
-    },
-    startingBlockNumber: {
-      type: 'number',
-    },
-    startingTimestamp: {
-      type: 'number',
-    },
-    sequencerAddress: {
-      type: 'address',
-    },
-    outputOracleOwner: {
-      type: 'address',
-    },
-  },
+  deployConfigSpec,
   external: {
     contracts: [
       {
         artifacts: '../contracts/artifacts',
       },
-      {
-        artifacts: '../contracts-governance/artifacts',
-      },
     ],
     deployments: {
-      goerli: ['../contracts/deployments/goerli'],
+      goerli: [
+        '../contracts/deployments/goerli',
+        '../contracts-periphery/deployments/goerli',
+      ],
+      mainnet: [
+        '../contracts/deployments/mainnet',
+        '../contracts-periphery/deployments/mainnet',
+      ],
+      'mainnet-forked': [
+        '../contracts/deployments/mainnet',
+        '../contracts-periphery/deployments/mainnet',
+      ],
+      'goerli-forked': [
+        '../contracts/deployments/goerli',
+        '../contracts-periphery/deployments/goerli',
+      ],
+      'final-migration-rehearsal': [
+        '../contracts/deployments/goerli',
+        '../contracts-periphery/deployments/goerli',
+      ],
     },
   },
   solidity: {
     compilers: [
       {
-        version: '0.8.10',
+        version: '0.8.15',
         settings: {
           optimizer: { enabled: true, runs: 10_000 },
         },
@@ -115,7 +151,8 @@ const config: HardhatUserConfig = {
     ],
     settings: {
       metadata: {
-        bytecodeHash: 'none',
+        bytecodeHash:
+          process.env.FOUNDRY_PROFILE === 'echidna' ? 'ipfs' : 'none',
       },
       outputSelection: {
         '*': {

@@ -18,22 +18,37 @@
 package testlog
 
 import (
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"testing"
 
 	"github.com/ethereum/go-ethereum/log"
 )
 
+var useColorInTestLog bool = true
+
+func init() {
+	if os.Getenv("OP_TESTLOG_DISABLE_COLOR") == "true" {
+		useColorInTestLog = false
+	}
+}
+
+// Testing interface to log to. Some functions are marked as Helper function to log the call site accurately.
+// Standard Go testing.TB implements this, as well as Hive and other Go-like test frameworks.
+type Testing interface {
+	Logf(format string, args ...any)
+	Helper()
+}
+
 // Handler returns a log handler which logs to the unit test log of t.
-func Handler(t *testing.T, level log.Lvl) log.Handler {
+func Handler(t Testing, level log.Lvl) log.Handler {
 	return log.LvlFilterHandler(level, &handler{t, log.TerminalFormat(false)})
 }
 
 type handler struct {
-	t   *testing.T
+	t   Testing
 	fmt log.Format
 }
 
@@ -47,7 +62,7 @@ func (h *handler) Log(r *log.Record) error {
 // helpers, so the file and line number in unit test output correspond to the call site
 // which emitted the log message.
 type logger struct {
-	t  *testing.T
+	t  Testing
 	l  log.Logger
 	mu *sync.Mutex
 	h  *bufHandler
@@ -64,18 +79,18 @@ func (h *bufHandler) Log(r *log.Record) error {
 }
 
 // Logger returns a logger which logs to the unit test log of t.
-func Logger(t *testing.T, level log.Lvl) log.Logger {
+func Logger(t Testing, level log.Lvl) log.Logger {
 	l := &logger{
 		t:  t,
 		l:  log.New(),
 		mu: new(sync.Mutex),
-		h:  &bufHandler{fmt: log.TerminalFormat(true)},
+		h:  &bufHandler{fmt: log.TerminalFormat(useColorInTestLog)},
 	}
 	l.l.SetHandler(log.LvlFilterHandler(level, l.h))
 	return l
 }
 
-func (l *logger) Trace(msg string, ctx ...interface{}) {
+func (l *logger) Trace(msg string, ctx ...any) {
 	l.t.Helper()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -83,7 +98,7 @@ func (l *logger) Trace(msg string, ctx ...interface{}) {
 	l.flush()
 }
 
-func (l *logger) Debug(msg string, ctx ...interface{}) {
+func (l *logger) Debug(msg string, ctx ...any) {
 	l.t.Helper()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -91,7 +106,7 @@ func (l *logger) Debug(msg string, ctx ...interface{}) {
 	l.flush()
 }
 
-func (l *logger) Info(msg string, ctx ...interface{}) {
+func (l *logger) Info(msg string, ctx ...any) {
 	l.t.Helper()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -99,7 +114,7 @@ func (l *logger) Info(msg string, ctx ...interface{}) {
 	l.flush()
 }
 
-func (l *logger) Warn(msg string, ctx ...interface{}) {
+func (l *logger) Warn(msg string, ctx ...any) {
 	l.t.Helper()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -107,7 +122,7 @@ func (l *logger) Warn(msg string, ctx ...interface{}) {
 	l.flush()
 }
 
-func (l *logger) Error(msg string, ctx ...interface{}) {
+func (l *logger) Error(msg string, ctx ...any) {
 	l.t.Helper()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -115,7 +130,7 @@ func (l *logger) Error(msg string, ctx ...interface{}) {
 	l.flush()
 }
 
-func (l *logger) Crit(msg string, ctx ...interface{}) {
+func (l *logger) Crit(msg string, ctx ...any) {
 	l.t.Helper()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -123,7 +138,7 @@ func (l *logger) Crit(msg string, ctx ...interface{}) {
 	l.flush()
 }
 
-func (l *logger) New(ctx ...interface{}) log.Logger {
+func (l *logger) New(ctx ...any) log.Logger {
 	return &logger{l.t, l.l.New(ctx...), l.mu, l.h}
 }
 
@@ -140,9 +155,10 @@ func (l *logger) flush() {
 	l.t.Helper()
 	// 2 frame skip for flush() + public logger fn
 	decorationLen := estimateInfoLen(2)
-	padding := 20
-	if decorationLen <= 25 {
-		padding = 25 - decorationLen
+	padding := 0
+	padLength := 30
+	if decorationLen <= padLength {
+		padding = padLength - decorationLen
 	}
 	for _, r := range l.h.buf {
 		l.t.Logf("%*s%s", padding, "", l.h.fmt.Format(r))

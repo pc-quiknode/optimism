@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity 0.8.15;
 
-import { Owned } from "@rari-capital/solmate/src/auth/Owned.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { Proxy } from "./Proxy.sol";
 import { AddressManager } from "../legacy/AddressManager.sol";
 import { L1ChugSplashProxy } from "../legacy/L1ChugSplashProxy.sol";
@@ -32,7 +32,7 @@ interface IStaticL1ChugSplashProxy {
  *         based on the OpenZeppelin implementation. It has backwards compatibility logic to work
  *         with the various types of proxies that have been deployed by Optimism in the past.
  */
-contract ProxyAdmin is Owned {
+contract ProxyAdmin is Ownable {
     /**
      * @notice The proxy types that the ProxyAdmin can manage.
      *
@@ -47,13 +47,11 @@ contract ProxyAdmin is Owned {
     }
 
     /**
-     * @custom:legacy
      * @notice A mapping of proxy types, used for backwards compatibility.
      */
     mapping(address => ProxyType) public proxyType;
 
     /**
-     * @custom:legacy
      * @notice A reverse mapping of addresses to names held in the AddressManager. This must be
      *         manually kept up to date with changes in the AddressManager for this contract
      *         to be able to work as an admin for the ResolvedDelegateProxy type.
@@ -61,22 +59,22 @@ contract ProxyAdmin is Owned {
     mapping(address => string) public implementationName;
 
     /**
-     * @custom:legacy
      * @notice The address of the address manager, this is required to manage the
      *         ResolvedDelegateProxy type.
      */
     AddressManager public addressManager;
 
     /**
-     * @custom:legacy
      * @notice A legacy upgrading indicator used by the old Chugsplash Proxy.
      */
-    bool internal upgrading = false;
+    bool internal upgrading;
 
     /**
      * @param _owner Address of the initial owner of this contract.
      */
-    constructor(address _owner) Owned(_owner) {}
+    constructor(address _owner) Ownable() {
+        _transferOwnership(_owner);
+    }
 
     /**
      * @notice Sets the proxy type for a given address. Only required for non-standard (legacy)
@@ -125,6 +123,16 @@ contract ProxyAdmin is Owned {
 
     /**
      * @custom:legacy
+     * @notice Set the upgrading status for the Chugsplash proxy type.
+     *
+     * @param _upgrading Whether or not the system is upgrading.
+     */
+    function setUpgrading(bool _upgrading) external onlyOwner {
+        upgrading = _upgrading;
+    }
+
+    /**
+     * @custom:legacy
      * @notice Legacy function used to tell ChugSplashProxy contracts if an upgrade is happening.
      *
      * @return Whether or not there is an upgrade going on. May not actually tell you whether an
@@ -133,16 +141,6 @@ contract ProxyAdmin is Owned {
      */
     function isUpgrading() external view returns (bool) {
         return upgrading;
-    }
-
-    /**
-     * @custom:legacy
-     * @notice Set the upgrading status for the Chugsplash proxy type.
-     *
-     * @param _upgrading Whether or not the system is upgrading.
-     */
-    function setUpgrading(bool _upgrading) external onlyOwner {
-        upgrading = _upgrading;
     }
 
     /**
@@ -216,6 +214,7 @@ contract ProxyAdmin is Owned {
             Proxy(_proxy).upgradeTo(_implementation);
         } else if (ptype == ProxyType.CHUGSPLASH) {
             L1ChugSplashProxy(_proxy).setStorage(
+                // bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1)
                 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc,
                 bytes32(uint256(uint160(_implementation)))
             );
@@ -223,7 +222,9 @@ contract ProxyAdmin is Owned {
             string memory name = implementationName[_proxy];
             addressManager.setAddress(name, _implementation);
         } else {
-            revert("ProxyAdmin: unknown proxy type");
+            // It should not be possible to retrieve a ProxyType value which is not matched by
+            // one of the previous conditions.
+            assert(false);
         }
     }
 

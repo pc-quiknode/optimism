@@ -6,19 +6,23 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/hashicorp/go-multierror"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/connmgr"
+	"github.com/libp2p/go-libp2p/core/host"
+	p2pmetrics "github.com/libp2p/go-libp2p/core/metrics"
 	ma "github.com/multiformats/go-multiaddr"
 
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-node/metrics"
+
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/enode"
-	"github.com/hashicorp/go-multierror"
-	"github.com/libp2p/go-libp2p-core/connmgr"
-	"github.com/libp2p/go-libp2p-core/host"
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
+
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
 )
 
+// NodeP2P is a p2p node, which can be used to gossip messages.
 type NodeP2P struct {
 	host    host.Host           // p2p host (optional, may be nil)
 	gater   ConnectionGater     // p2p gater, to ban/unban peers with, may be nil even with p2p enabled
@@ -30,12 +34,14 @@ type NodeP2P struct {
 	gsOut    GossipOut        // p2p gossip application interface for publishing
 }
 
-func NewNodeP2P(resourcesCtx context.Context, rollupCfg *rollup.Config, log log.Logger, setup SetupP2P, gossipIn GossipIn) (*NodeP2P, error) {
+// NewNodeP2P creates a new p2p node, and returns a reference to it. If the p2p is disabled, it returns nil.
+// If metrics are configured, a bandwidth monitor will be spawned in a goroutine.
+func NewNodeP2P(resourcesCtx context.Context, rollupCfg *rollup.Config, log log.Logger, setup SetupP2P, gossipIn GossipIn, runCfg GossipRuntimeConfig, metrics metrics.Metricer) (*NodeP2P, error) {
 	if setup == nil {
 		return nil, errors.New("p2p node cannot be created without setup")
 	}
 	var n NodeP2P
-	if err := n.init(resourcesCtx, rollupCfg, log, setup, gossipIn); err != nil {
+	if err := n.init(resourcesCtx, rollupCfg, log, setup, gossipIn, runCfg, metrics); err != nil {
 		closeErr := n.Close()
 		if closeErr != nil {
 			log.Error("failed to close p2p after starting with err", "closeErr", closeErr, "err", err)
@@ -48,15 +54,17 @@ func NewNodeP2P(resourcesCtx context.Context, rollupCfg *rollup.Config, log log.
 	return &n, nil
 }
 
-func (n *NodeP2P) init(resourcesCtx context.Context, rollupCfg *rollup.Config, log log.Logger, setup SetupP2P, gossipIn GossipIn) error {
+func (n *NodeP2P) init(resourcesCtx context.Context, rollupCfg *rollup.Config, log log.Logger, setup SetupP2P, gossipIn GossipIn, runCfg GossipRuntimeConfig, metrics metrics.Metricer) error {
+	bwc := p2pmetrics.NewBandwidthCounter()
+
 	var err error
 	// nil if disabled.
-	n.host, err = setup.Host(log)
+	n.host, err = setup.Host(log, bwc)
 	if err != nil {
 		if n.dv5Udp != nil {
 			n.dv5Udp.Close()
 		}
-		return fmt.Errorf("failed to start p2p host: %v", err)
+		return fmt.Errorf("failed to start p2p host: %w", err)
 	}
 
 	if n.host != nil {
@@ -66,17 +74,15 @@ func (n *NodeP2P) init(resourcesCtx context.Context, rollupCfg *rollup.Config, l
 			n.connMgr = extra.ConnectionManager()
 		}
 		// notify of any new connections/streams/etc.
-		n.host.Network().Notify(NewNetworkNotifier(log))
-		// unregister identify-push handler. Only identifying on dial is fine, and more robust against spam
-		n.host.RemoveStreamHandler(identify.IDDelta)
-		n.gs, err = NewGossipSub(resourcesCtx, n.host, rollupCfg)
+		n.host.Network().Notify(NewNetworkNotifier(log, metrics))
+		// note: the IDDelta functionality was removed from libP2P, and no longer needs to be explicitly disabled.
+		n.gs, err = NewGossipSub(resourcesCtx, n.host, n.gater, rollupCfg, setup, metrics, log)
 		if err != nil {
-			return fmt.Errorf("failed to start gossipsub router: %v", err)
+			return fmt.Errorf("failed to start gossipsub router: %w", err)
 		}
-
-		n.gsOut, err = JoinGossip(resourcesCtx, n.host.ID(), n.gs, log, rollupCfg, gossipIn)
+		n.gsOut, err = JoinGossip(resourcesCtx, n.host.ID(), setup.TopicScoringParams(), n.gs, log, rollupCfg, runCfg, gossipIn)
 		if err != nil {
-			return fmt.Errorf("failed to join blocks gossip topic: %v", err)
+			return fmt.Errorf("failed to join blocks gossip topic: %w", err)
 		}
 		log.Info("started p2p host", "addrs", n.host.Addrs(), "peerID", n.host.ID().Pretty())
 
@@ -88,7 +94,11 @@ func (n *NodeP2P) init(resourcesCtx context.Context, rollupCfg *rollup.Config, l
 		// All nil if disabled.
 		n.dv5Local, n.dv5Udp, err = setup.Discovery(log.New("p2p", "discv5"), rollupCfg, tcpPort)
 		if err != nil {
-			return fmt.Errorf("failed to start discv5: %v", err)
+			return fmt.Errorf("failed to start discv5: %w", err)
+		}
+
+		if metrics != nil {
+			go metrics.RecordBandwidth(resourcesCtx, bwc)
 		}
 	}
 	return nil
@@ -129,12 +139,12 @@ func (n *NodeP2P) Close() error {
 	}
 	if n.gsOut != nil {
 		if err := n.gsOut.Close(); err != nil {
-			result = multierror.Append(result, fmt.Errorf("failed to close gossip cleanly: %v", err))
+			result = multierror.Append(result, fmt.Errorf("failed to close gossip cleanly: %w", err))
 		}
 	}
 	if n.host != nil {
 		if err := n.host.Close(); err != nil {
-			result = multierror.Append(result, fmt.Errorf("failed to close p2p host cleanly: %v", err))
+			result = multierror.Append(result, fmt.Errorf("failed to close p2p host cleanly: %w", err))
 		}
 	}
 	return result.ErrorOrNil()

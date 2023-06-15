@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity 0.8.15;
 
 import { Semver } from "../universal/Semver.sol";
-import { L2StandardBridge } from "./L2StandardBridge.sol";
-import { PredeployAddresses } from "../libraries/PredeployAddresses.sol";
+import { FeeVault } from "../universal/FeeVault.sol";
 
 /**
  * @custom:proxied
@@ -12,41 +11,21 @@ import { PredeployAddresses } from "../libraries/PredeployAddresses.sol";
  * @notice The SequencerFeeVault is the contract that holds any fees paid to the Sequencer during
  *         transaction processing and block production.
  */
-contract SequencerFeeVault is Semver {
+contract SequencerFeeVault is FeeVault, Semver {
     /**
-     * @notice Minimum balance before a withdrawal can be triggered.
+     * @custom:semver 1.0.0
+     *
+     * @param _recipient Address that will receive the accumulated fees.
      */
-    uint256 public constant MIN_WITHDRAWAL_AMOUNT = 15 ether;
-
-    /**
-     * @notice Wallet that will receive the fees on L1.
-     */
-    address public l1FeeWallet;
+    constructor(address _recipient) FeeVault(_recipient, 10 ether) Semver(1, 0, 0) {}
 
     /**
-     * @custom:semver 0.0.1
+     * @custom:legacy
+     * @notice Legacy getter for the recipient address.
+     *
+     * @return The recipient address.
      */
-    constructor() Semver(0, 0, 1) {}
-
-    /**
-     * @notice Allow the contract to receive ETH.
-     */
-    receive() external payable {}
-
-    /**
-     * @notice Triggers a withdrawal of funds to the L1 fee wallet.
-     */
-    function withdraw() external {
-        require(
-            address(this).balance >= MIN_WITHDRAWAL_AMOUNT,
-            // solhint-disable-next-line max-line-length
-            "OVM_SequencerFeeVault: withdrawal amount must be greater than minimum withdrawal amount"
-        );
-
-        uint256 balance = address(this).balance;
-
-        L2StandardBridge(payable(PredeployAddresses.L2_STANDARD_BRIDGE)).withdrawTo{
-            value: balance
-        }(PredeployAddresses.LEGACY_ERC20_ETH, l1FeeWallet, balance, 0, bytes(""));
+    function l1FeeWallet() public view returns (address) {
+        return RECIPIENT;
     }
 }

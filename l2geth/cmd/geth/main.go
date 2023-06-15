@@ -193,6 +193,7 @@ var (
 		utils.IPCPathFlag,
 		utils.InsecureUnlockAllowedFlag,
 		utils.RPCGlobalGasCap,
+		utils.RPCGlobalEVMTimeoutFlag,
 	}
 
 	whisperFlags = []cli.Flag{

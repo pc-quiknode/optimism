@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity 0.8.15;
 
 /* Contract Imports */
 import { OptimismMintableERC20 } from "../universal/OptimismMintableERC20.sol";
-import { PredeployAddresses } from "../libraries/PredeployAddresses.sol";
+import { Semver } from "./Semver.sol";
 
 /**
  * @custom:proxied
@@ -14,7 +14,12 @@ import { PredeployAddresses } from "../libraries/PredeployAddresses.sol";
  *         who may be less familiar with deploying smart contracts. Designed to be backwards
  *         compatible with the older StandardL2ERC20Factory contract.
  */
-contract OptimismMintableERC20Factory {
+contract OptimismMintableERC20Factory is Semver {
+    /**
+     * @notice Address of the StandardBridge on this chain.
+     */
+    address public immutable BRIDGE;
+
     /**
      * @custom:legacy
      * @notice Emitted whenever a new OptimismMintableERC20 is created. Legacy version of the newer
@@ -39,15 +44,16 @@ contract OptimismMintableERC20Factory {
     );
 
     /**
-     * @notice Address of the StandardBridge on this chain.
-     */
-    address public immutable bridge;
-
-    /**
+     * @custom:semver 1.1.0
+     *
+     * @notice The semver MUST be bumped any time that there is a change in
+     *         the OptimismMintableERC20 token contract since this contract
+     *         is responsible for deploying OptimismMintableERC20 contracts.
+     *
      * @param _bridge Address of the StandardBridge on this chain.
      */
-    constructor(address _bridge) {
-        bridge = _bridge;
+    constructor(address _bridge) Semver(1, 1, 0) {
+        BRIDGE = _bridge;
     }
 
     /**
@@ -88,22 +94,17 @@ contract OptimismMintableERC20Factory {
             "OptimismMintableERC20Factory: must provide remote token address"
         );
 
-        require(
-            bridge != address(0),
-            "OptimismMintableERC20Factory: must initialize contract first"
-        );
-
-        OptimismMintableERC20 localToken = new OptimismMintableERC20(
-            bridge,
-            _remoteToken,
-            _name,
-            _symbol
+        address localToken = address(
+            new OptimismMintableERC20(BRIDGE, _remoteToken, _name, _symbol)
         );
 
         // Emit the old event too for legacy support.
-        emit StandardL2TokenCreated(_remoteToken, address(localToken));
-        emit OptimismMintableERC20Created(_remoteToken, address(localToken), msg.sender);
+        emit StandardL2TokenCreated(_remoteToken, localToken);
 
-        return address(localToken);
+        // Emit the updated event. The arguments here differ from the legacy event, but
+        // are consistent with the ordering used in StandardBridge events.
+        emit OptimismMintableERC20Created(localToken, _remoteToken, msg.sender);
+
+        return localToken;
     }
 }

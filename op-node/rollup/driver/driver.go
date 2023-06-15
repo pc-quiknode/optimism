@@ -2,53 +2,78 @@ package driver
 
 import (
 	"context"
-	"math/big"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-node/eth"
-	"github.com/ethereum-optimism/optimism/op-node/l1"
-	"github.com/ethereum-optimism/optimism/op-node/l2"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum-optimism/optimism/op-node/sources"
 )
 
-type Driver struct {
-	s *state
-}
+type Metrics interface {
+	RecordPipelineReset()
+	RecordPublishingError()
+	RecordDerivationError()
 
-type Downloader interface {
-	InfoByHash(ctx context.Context, hash common.Hash) (eth.L1Info, error)
-	Fetch(ctx context.Context, blockHash common.Hash) (eth.L1Info, types.Transactions, types.Receipts, error)
+	RecordReceivedUnsafePayload(payload *eth.ExecutionPayload)
+
+	RecordL1Ref(name string, ref eth.L1BlockRef)
+	RecordL2Ref(name string, ref eth.L2BlockRef)
+
+	RecordUnsafePayloadsBuffer(length uint64, memSize uint64, next eth.BlockID)
+
+	SetDerivationIdle(idle bool)
+
+	RecordL1ReorgDepth(d uint64)
+
+	EngineMetrics
+	SequencerMetrics
 }
 
 type L1Chain interface {
 	derive.L1Fetcher
-	L1HeadBlockRef(context.Context) (eth.L1BlockRef, error)
+	L1BlockRefByLabel(context.Context, eth.BlockLabel) (eth.L1BlockRef, error)
 }
 
 type L2Chain interface {
 	derive.Engine
-	L2BlockRefHead(ctx context.Context) (eth.L2BlockRef, error)
-	L2BlockRefByNumber(ctx context.Context, l2Num *big.Int) (eth.L2BlockRef, error)
+	L2BlockRefByLabel(ctx context.Context, label eth.BlockLabel) (eth.L2BlockRef, error)
 	L2BlockRefByHash(ctx context.Context, l2Hash common.Hash) (eth.L2BlockRef, error)
+	L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error)
 }
 
 type DerivationPipeline interface {
 	Reset()
 	Step(ctx context.Context) error
-	SetUnsafeHead(head eth.L2BlockRef)
 	AddUnsafePayload(payload *eth.ExecutionPayload)
+	GetUnsafeQueueGap(expectedNumber uint64) (uint64, uint64)
+	Finalize(ref eth.L1BlockRef)
+	FinalizedL1() eth.L1BlockRef
 	Finalized() eth.L2BlockRef
 	SafeL2Head() eth.L2BlockRef
 	UnsafeL2Head() eth.L2BlockRef
-	Progress() derive.Progress
+	Origin() eth.L1BlockRef
 }
 
-type outputInterface interface {
-	// createNewBlock builds a new block based on the L2 Head, L1 Origin, and the current mempool.
-	createNewBlock(ctx context.Context, l2Head eth.L2BlockRef, l2SafeHead eth.BlockID, l2Finalized eth.BlockID, l1Origin eth.L1BlockRef) (eth.L2BlockRef, *eth.ExecutionPayload, error)
+type L1StateIface interface {
+	HandleNewL1HeadBlock(head eth.L1BlockRef)
+	HandleNewL1SafeBlock(safe eth.L1BlockRef)
+	HandleNewL1FinalizedBlock(finalized eth.L1BlockRef)
+
+	L1Head() eth.L1BlockRef
+	L1Safe() eth.L1BlockRef
+	L1Finalized() eth.L1BlockRef
+}
+
+type SequencerIface interface {
+	StartBuildingBlock(ctx context.Context) error
+	CompleteBuildingBlock(ctx context.Context) (*eth.ExecutionPayload, error)
+	PlanNextSequencerAction() time.Duration
+	RunNextSequencerAction(ctx context.Context) (*eth.ExecutionPayload, error)
+	BuildingOnto() eth.L2BlockRef
 }
 
 type Network interface {
@@ -56,36 +81,39 @@ type Network interface {
 	PublishL2Payload(ctx context.Context, payload *eth.ExecutionPayload) error
 }
 
-func NewDriver(driverCfg *Config, cfg *rollup.Config, l2 *l2.Source, l1 *l1.Source, network Network, log log.Logger, snapshotLog log.Logger) *Driver {
-	output := &outputImpl{
-		Config: cfg,
-		dl:     l1,
-		l2:     l2,
-		log:    log,
+// NewDriver composes an events handler that tracks L1 state, triggers L2 derivation, and optionally sequences new L2 blocks.
+func NewDriver(driverCfg *Config, cfg *rollup.Config, l2 L2Chain, l1 L1Chain, syncClient *sources.SyncClient, network Network, log log.Logger, snapshotLog log.Logger, metrics Metrics) *Driver {
+	l1State := NewL1State(log, metrics)
+	sequencerConfDepth := NewConfDepth(driverCfg.SequencerConfDepth, l1State.L1Head, l1)
+	findL1Origin := NewL1OriginSelector(log, cfg, sequencerConfDepth)
+	verifConfDepth := NewConfDepth(driverCfg.VerifierConfDepth, l1State.L1Head, l1)
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, l2, metrics)
+	attrBuilder := derive.NewFetchingAttributesBuilder(cfg, l1, l2)
+	engine := derivationPipeline
+	meteredEngine := NewMeteredEngine(cfg, engine, metrics, log)
+	sequencer := NewSequencer(log, cfg, meteredEngine, attrBuilder, findL1Origin, metrics)
+
+	return &Driver{
+		l1State:          l1State,
+		derivation:       derivationPipeline,
+		stateReq:         make(chan chan struct{}),
+		forceReset:       make(chan chan struct{}, 10),
+		startSequencer:   make(chan hashAndErrorChannel, 10),
+		stopSequencer:    make(chan chan hashAndError, 10),
+		config:           cfg,
+		driverConfig:     driverCfg,
+		done:             make(chan struct{}),
+		log:              log,
+		snapshotLog:      snapshotLog,
+		l1:               l1,
+		l2:               l2,
+		sequencer:        sequencer,
+		network:          network,
+		metrics:          metrics,
+		l1HeadSig:        make(chan eth.L1BlockRef, 10),
+		l1SafeSig:        make(chan eth.L1BlockRef, 10),
+		l1FinalizedSig:   make(chan eth.L1BlockRef, 10),
+		unsafeL2Payloads: make(chan *eth.ExecutionPayload, 10),
+		L2SyncCl:         syncClient,
 	}
-
-	var state *state
-	verifConfDepth := NewConfDepth(driverCfg.VerifierConfDepth, func() eth.L1BlockRef { return state.l1Head }, l1)
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, verifConfDepth, l2)
-	state = NewState(driverCfg, log, snapshotLog, cfg, l1, l2, output, derivationPipeline, network)
-	return &Driver{s: state}
-}
-
-func (d *Driver) OnL1Head(ctx context.Context, head eth.L1BlockRef) error {
-	return d.s.OnL1Head(ctx, head)
-}
-
-func (d *Driver) OnUnsafeL2Payload(ctx context.Context, payload *eth.ExecutionPayload) error {
-	return d.s.OnUnsafeL2Payload(ctx, payload)
-}
-
-func (d *Driver) SyncStatus(ctx context.Context) (*SyncStatus, error) {
-	return d.s.SyncStatus(ctx)
-}
-
-func (d *Driver) Start(ctx context.Context) error {
-	return d.s.Start(ctx)
-}
-func (d *Driver) Close() error {
-	return d.s.Close()
 }

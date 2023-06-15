@@ -3,31 +3,26 @@ package node
 import (
 	"context"
 	"encoding/json"
-	"math/big"
 	"math/rand"
-
-	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
-	"github.com/ethereum-optimism/optimism/op-node/testutils"
-
-	"github.com/ethereum-optimism/optimism/op-node/metrics"
-
-	"github.com/ethereum-optimism/optimism/op-node/version"
-
 	"testing"
 
-	"github.com/ethereum-optimism/optimism/op-node/testlog"
-
-	"github.com/ethereum-optimism/optimism/op-node/eth"
-
-	"github.com/ethereum-optimism/optimism/op-bindings/predeploys"
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/stretchr/testify/mock"
-
-	"github.com/ethereum-optimism/optimism/op-node/l2"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
+	rpcclient "github.com/ethereum-optimism/optimism/op-node/client"
+
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/stretchr/testify/assert"
+
+	"github.com/ethereum-optimism/optimism/op-bindings/predeploys"
+	"github.com/ethereum-optimism/optimism/op-node/eth"
+	"github.com/ethereum-optimism/optimism/op-node/metrics"
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-node/testlog"
+	"github.com/ethereum-optimism/optimism/op-node/testutils"
+	"github.com/ethereum-optimism/optimism/op-node/version"
 )
 
 func TestOutputAtBlock(t *testing.T) {
@@ -76,7 +71,7 @@ func TestOutputAtBlock(t *testing.T) {
 		"nonce": "0x1",
 		"storageHash": "0xc1917a80cb25ccc50d0d1921525a44fb619b4601194ca726ae32312f08a799f8"
 	}`
-	var result l2.AccountResult
+	var result eth.AccountResult
 	err = json.Unmarshal([]byte(resultTestData), &result)
 	assert.NoError(t, err)
 
@@ -88,30 +83,57 @@ func TestOutputAtBlock(t *testing.T) {
 		// ignore other rollup config info in this test
 	}
 
-	l2Client := &mockL2Client{}
-	l2Client.mock.On("GetBlockHeader", "latest").Return(&header)
-	l2Client.mock.On("GetProof", predeploys.L2ToL1MessagePasserAddr, "latest").Return(&result)
+	l2Client := &testutils.MockL2Client{}
+	info := &testutils.MockBlockInfo{
+		InfoHash:        header.Hash(),
+		InfoParentHash:  header.ParentHash,
+		InfoCoinbase:    header.Coinbase,
+		InfoRoot:        header.Root,
+		InfoNum:         header.Number.Uint64(),
+		InfoTime:        header.Time,
+		InfoMixDigest:   header.MixDigest,
+		InfoBaseFee:     header.BaseFee,
+		InfoReceiptRoot: header.ReceiptHash,
+	}
+	ref := eth.L2BlockRef{
+		Hash:           header.Hash(),
+		Number:         header.Number.Uint64(),
+		ParentHash:     header.ParentHash,
+		Time:           header.Time,
+		L1Origin:       eth.BlockID{},
+		SequenceNumber: 0,
+	}
+	l2Client.ExpectInfoByHash(common.HexToHash("0x8512bee03061475e4b069171f7b406097184f16b22c3f5c97c0abfc49591c524"), info, nil)
+	l2Client.ExpectGetProof(predeploys.L2ToL1MessagePasserAddr, []common.Hash{}, "0x8512bee03061475e4b069171f7b406097184f16b22c3f5c97c0abfc49591c524", &result, nil)
 
 	drClient := &mockDriverClient{}
+	status := randomSyncStatus(rand.New(rand.NewSource(123)))
+	drClient.ExpectBlockRefWithStatus(0xdcdc89, ref, status, nil)
 
-	server, err := newRPCServer(context.Background(), rpcCfg, rollupCfg, l2Client, drClient, log, "0.0", metrics.NewMetrics(""))
-	assert.NoError(t, err)
-	assert.NoError(t, server.Start())
+	server, err := newRPCServer(context.Background(), rpcCfg, rollupCfg, l2Client, drClient, log, "0.0", metrics.NoopMetrics)
+	require.NoError(t, err)
+	require.NoError(t, server.Start())
 	defer server.Stop()
 
-	client, err := dialRPCClientWithBackoff(context.Background(), log, "http://"+server.Addr().String(), nil)
-	assert.NoError(t, err)
+	client, err := rpcclient.DialRPCClientWithBackoff(context.Background(), log, "http://"+server.Addr().String())
+	require.NoError(t, err)
 
-	var out []eth.Bytes32
-	err = client.CallContext(context.Background(), &out, "optimism_outputAtBlock", "latest")
-	assert.NoError(t, err)
-	assert.Len(t, out, 2)
-	l2Client.mock.AssertExpectations(t)
+	var out *eth.OutputResponse
+	err = client.CallContext(context.Background(), &out, "optimism_outputAtBlock", "0xdcdc89")
+	require.NoError(t, err)
+
+	require.Equal(t, "0x0000000000000000000000000000000000000000000000000000000000000000", out.Version.String())
+	require.Equal(t, "0xc861dbdc5bf1d8bbbc0bca7cd876ab6a70748c50b2054a46e8f30e99002170ab", out.OutputRoot.String())
+	require.Equal(t, "0xb46d4bcb0e471e1b8506031a1f34ebc6f200253cbaba56246dd2320e8e2c8f13", out.StateRoot.String())
+	require.Equal(t, "0xc1917a80cb25ccc50d0d1921525a44fb619b4601194ca726ae32312f08a799f8", out.WithdrawalStorageRoot.String())
+	require.Equal(t, *status, *out.Status)
+	l2Client.Mock.AssertExpectations(t)
+	drClient.Mock.AssertExpectations(t)
 }
 
 func TestVersion(t *testing.T) {
 	log := testlog.Logger(t, log.LvlError)
-	l2Client := &mockL2Client{}
+	l2Client := &testutils.MockL2Client{}
 	drClient := &mockDriverClient{}
 	rpcCfg := &RPCConfig{
 		ListenAddr: "localhost",
@@ -120,12 +142,12 @@ func TestVersion(t *testing.T) {
 	rollupCfg := &rollup.Config{
 		// ignore other rollup config info in this test
 	}
-	server, err := newRPCServer(context.Background(), rpcCfg, rollupCfg, l2Client, drClient, log, "0.0", metrics.NewMetrics(""))
+	server, err := newRPCServer(context.Background(), rpcCfg, rollupCfg, l2Client, drClient, log, "0.0", metrics.NoopMetrics)
 	assert.NoError(t, err)
 	assert.NoError(t, server.Start())
 	defer server.Stop()
 
-	client, err := dialRPCClientWithBackoff(context.Background(), log, "http://"+server.Addr().String(), nil)
+	client, err := rpcclient.DialRPCClientWithBackoff(context.Background(), log, "http://"+server.Addr().String())
 	assert.NoError(t, err)
 
 	var out string
@@ -134,19 +156,26 @@ func TestVersion(t *testing.T) {
 	assert.Equal(t, version.Version+"-"+version.Meta, out)
 }
 
+func randomSyncStatus(rng *rand.Rand) *eth.SyncStatus {
+	return &eth.SyncStatus{
+		CurrentL1:          testutils.RandomBlockRef(rng),
+		CurrentL1Finalized: testutils.RandomBlockRef(rng),
+		HeadL1:             testutils.RandomBlockRef(rng),
+		SafeL1:             testutils.RandomBlockRef(rng),
+		FinalizedL1:        testutils.RandomBlockRef(rng),
+		UnsafeL2:           testutils.RandomL2BlockRef(rng),
+		SafeL2:             testutils.RandomL2BlockRef(rng),
+		FinalizedL2:        testutils.RandomL2BlockRef(rng),
+	}
+}
+
 func TestSyncStatus(t *testing.T) {
 	log := testlog.Logger(t, log.LvlError)
-	l2Client := &mockL2Client{}
+	l2Client := &testutils.MockL2Client{}
 	drClient := &mockDriverClient{}
 	rng := rand.New(rand.NewSource(1234))
-	status := driver.SyncStatus{
-		CurrentL1:   testutils.RandomBlockRef(rng),
-		HeadL1:      testutils.RandomBlockRef(rng),
-		UnsafeL2:    testutils.RandomL2BlockRef(rng),
-		SafeL2:      testutils.RandomL2BlockRef(rng),
-		FinalizedL2: testutils.RandomL2BlockRef(rng),
-	}
-	drClient.On("SyncStatus").Return(&status)
+	status := randomSyncStatus(rng)
+	drClient.On("SyncStatus").Return(status)
 
 	rpcCfg := &RPCConfig{
 		ListenAddr: "localhost",
@@ -155,48 +184,45 @@ func TestSyncStatus(t *testing.T) {
 	rollupCfg := &rollup.Config{
 		// ignore other rollup config info in this test
 	}
-	server, err := newRPCServer(context.Background(), rpcCfg, rollupCfg, l2Client, drClient, log, "0.0", metrics.NewMetrics(""))
+	server, err := newRPCServer(context.Background(), rpcCfg, rollupCfg, l2Client, drClient, log, "0.0", metrics.NoopMetrics)
 	assert.NoError(t, err)
 	assert.NoError(t, server.Start())
 	defer server.Stop()
 
-	client, err := dialRPCClientWithBackoff(context.Background(), log, "http://"+server.Addr().String(), nil)
+	client, err := rpcclient.DialRPCClientWithBackoff(context.Background(), log, "http://"+server.Addr().String())
 	assert.NoError(t, err)
 
-	var out *driver.SyncStatus
+	var out *eth.SyncStatus
 	err = client.CallContext(context.Background(), &out, "optimism_syncStatus")
 	assert.NoError(t, err)
-	assert.Equal(t, &status, out)
+	assert.Equal(t, status, out)
 }
 
 type mockDriverClient struct {
 	mock.Mock
 }
 
-func (c *mockDriverClient) SyncStatus(ctx context.Context) (*driver.SyncStatus, error) {
-	return c.Mock.MethodCalled("SyncStatus").Get(0).(*driver.SyncStatus), nil
+func (c *mockDriverClient) ExpectBlockRefWithStatus(num uint64, ref eth.L2BlockRef, status *eth.SyncStatus, err error) {
+	c.Mock.On("BlockRefWithStatus", num).Return(ref, status, &err)
 }
 
-type mockL2Client struct {
-	mock mock.Mock
+func (c *mockDriverClient) BlockRefWithStatus(ctx context.Context, num uint64) (eth.L2BlockRef, *eth.SyncStatus, error) {
+	m := c.Mock.MethodCalled("BlockRefWithStatus", num)
+	return m[0].(eth.L2BlockRef), m[1].(*eth.SyncStatus), *m[2].(*error)
 }
 
-func (c *mockL2Client) BlockByNumber(ctx context.Context, number *big.Int) (*types.Block, error) {
-	return c.mock.MethodCalled("BlockByNumber", number).Get(0).(*types.Block), nil
+func (c *mockDriverClient) SyncStatus(ctx context.Context) (*eth.SyncStatus, error) {
+	return c.Mock.MethodCalled("SyncStatus").Get(0).(*eth.SyncStatus), nil
 }
 
-func (c *mockL2Client) L2BlockRefByNumber(ctx context.Context, l2Num *big.Int) (eth.L2BlockRef, error) {
-	return c.mock.MethodCalled("L2BlockRefByNumber", l2Num).Get(0).(eth.L2BlockRef), nil
+func (c *mockDriverClient) ResetDerivationPipeline(ctx context.Context) error {
+	return c.Mock.MethodCalled("ResetDerivationPipeline").Get(0).(error)
 }
 
-func (c *mockL2Client) L2BlockRefByHash(ctx context.Context, l2Hash common.Hash) (eth.L2BlockRef, error) {
-	return c.mock.MethodCalled("L2BlockRefByHash", l2Hash).Get(0).(eth.L2BlockRef), nil
+func (c *mockDriverClient) StartSequencer(ctx context.Context, blockHash common.Hash) error {
+	return c.Mock.MethodCalled("StartSequencer").Get(0).(error)
 }
 
-func (c *mockL2Client) GetBlockHeader(ctx context.Context, blockTag string) (*types.Header, error) {
-	return c.mock.MethodCalled("GetBlockHeader", blockTag).Get(0).(*types.Header), nil
-}
-
-func (c *mockL2Client) GetProof(ctx context.Context, address common.Address, blockTag string) (*l2.AccountResult, error) {
-	return c.mock.MethodCalled("GetProof", address, blockTag).Get(0).(*l2.AccountResult), nil
+func (c *mockDriverClient) StopSequencer(ctx context.Context) (common.Hash, error) {
+	return c.Mock.MethodCalled("StopSequencer").Get(0).(common.Hash), nil
 }

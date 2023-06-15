@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.10;
+pragma solidity 0.8.15;
 
-import { PredeployAddresses } from "../libraries/PredeployAddresses.sol";
+import { Predeploys } from "../libraries/Predeploys.sol";
 import { OptimismMintableERC20 } from "../universal/OptimismMintableERC20.sol";
 
 /**
@@ -19,8 +19,21 @@ contract LegacyERC20ETH is OptimismMintableERC20 {
      * @notice Initializes the contract as an Optimism Mintable ERC20.
      */
     constructor()
-        OptimismMintableERC20(PredeployAddresses.L2_STANDARD_BRIDGE, address(0), "Ether", "ETH")
+        OptimismMintableERC20(Predeploys.L2_STANDARD_BRIDGE, address(0), "Ether", "ETH")
     {}
+
+    /**
+     * @notice Returns the ETH balance of the target account. Overrides the base behavior of the
+     *         contract to preserve the invariant that the balance within this contract always
+     *         matches the balance in the state trie.
+     *
+     * @param _who Address of the account to query.
+     *
+     * @return The ETH balance of the target account.
+     */
+    function balanceOf(address _who) public view virtual override returns (uint256) {
+        return address(_who).balance;
+    }
 
     /**
      * @custom:blocked

@@ -5,6 +5,7 @@ temp
 .nyc_output
 coverage.json
 *.tsbuildinfo
+**/lcov.info
 
 yarn-error.log
 .yarn/*
@@ -38,6 +39,9 @@ packages/contracts-bedrock/deployments/anvil
 # vim
 *.sw*
 
+# jetbrains
+.idea/
+
 .env
 .env*
 !.env.example
@@ -53,3 +57,9 @@ coverage.out
 # Ignore bedrock go bindings local output files
 op-bindings/bin
 op-exporter
+
+
+__pycache__
+
+# Ignore echidna artifacts
+crytic-export

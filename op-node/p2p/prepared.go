@@ -4,14 +4,16 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ethereum/go-ethereum/p2p/enr"
-
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/metrics"
 
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/enode"
-	"github.com/libp2p/go-libp2p-core/host"
+	"github.com/ethereum/go-ethereum/p2p/enr"
+
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
 )
 
 // Prepared provides a p2p host and discv5 service that is already set up.
@@ -39,14 +41,14 @@ func (p *Prepared) Check() error {
 }
 
 // Host creates a libp2p host service. Returns nil, nil if p2p is disabled.
-func (p *Prepared) Host(log log.Logger) (host.Host, error) {
+func (p *Prepared) Host(log log.Logger, reporter metrics.Reporter) (host.Host, error) {
 	return p.HostP2P, nil
 }
 
 // Discovery creates a disc-v5 service. Returns nil, nil, nil if discovery is disabled.
 func (p *Prepared) Discovery(log log.Logger, rollupCfg *rollup.Config, tcpPort uint16) (*enode.LocalNode, *discover.UDPv5, error) {
 	if p.LocalNode != nil {
-		dat := OptimismENRData{
+		dat := OpStackENRData{
 			chainID: rollupCfg.L2ChainID.Uint64(),
 			version: 0,
 		}
@@ -56,4 +58,24 @@ func (p *Prepared) Discovery(log log.Logger, rollupCfg *rollup.Config, tcpPort u
 		}
 	}
 	return p.LocalNode, p.UDPv5, nil
+}
+
+func (p *Prepared) ConfigureGossip(params *pubsub.GossipSubParams) []pubsub.Option {
+	return nil
+}
+
+func (p *Prepared) PeerScoringParams() *pubsub.PeerScoreParams {
+	return nil
+}
+
+func (p *Prepared) BanPeers() bool {
+	return false
+}
+
+func (p *Prepared) TopicScoringParams() *pubsub.TopicScoreParams {
+	return nil
+}
+
+func (p *Prepared) Disabled() bool {
+	return false
 }

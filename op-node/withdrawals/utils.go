@@ -1,14 +1,13 @@
 package withdrawals
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"math/big"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-bindings/bindings"
-	"github.com/ethereum-optimism/optimism/op-bindings/predeploys"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -16,9 +15,12 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/ethclient/gethclient"
-	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/ethereum/go-ethereum/rpc"
+
+	"github.com/ethereum-optimism/optimism/op-bindings/bindings"
+	"github.com/ethereum-optimism/optimism/op-bindings/predeploys"
 )
+
+var MessagePassedTopic = crypto.Keccak256Hash([]byte("MessagePassed(uint256,address,address,uint256,uint256,bytes,bytes32)"))
 
 // WaitForFinalizationPeriod waits until there is OutputProof for an L2 block number larger than the supplied l2BlockNumber
 // and that the output is finalized.
@@ -52,7 +54,7 @@ func WaitForFinalizationPeriod(ctx context.Context, client *ethclient.Client, po
 	}
 	l2BlockNumber = l2BlockNumber.Mul(l2BlockNumber, submissionInterval)
 
-	finalizationPeriod, err := portal.FINALIZATIONPERIODSECONDS(opts)
+	finalizationPeriod, err := l2OO.FINALIZATIONPERIODSECONDS(opts)
 	if err != nil {
 		return 0, err
 	}
@@ -89,7 +91,7 @@ loop:
 	}
 
 	// Now wait for it to be finalized
-	output, err := l2OO.GetL2Output(opts, l2BlockNumber)
+	output, err := l2OO.GetL2OutputAfter(opts, l2BlockNumber)
 	if err != nil {
 		return 0, err
 	}
@@ -120,75 +122,67 @@ loop:
 }
 
 type ProofClient interface {
-	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
 	GetProof(context.Context, common.Address, []string, *big.Int) (*gethclient.AccountResult, error)
 }
 
-type ec = *ethclient.Client
-type gc = *gethclient.Client
-
-type Client struct {
-	ec
-	gc
+type ReceiptClient interface {
+	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
 }
 
-// Ensure that ProofClient and Client interfaces are valid
-var _ ProofClient = &Client{}
-
-// NewClient wraps a RPC client with both ethclient and gethclient methods.
-// Implements ProofClient
-func NewClient(client *rpc.Client) *Client {
-	return &Client{
-		ethclient.NewClient(client),
-		gethclient.New(client),
-	}
-
-}
-
-// FinalizedWithdrawalParameters is the set of parameters to pass to the FinalizedWithdrawal function
-type FinalizedWithdrawalParameters struct {
+// ProvenWithdrawalParameters is the set of parameters to pass to the ProveWithdrawalTransaction
+// and FinalizeWithdrawalTransaction functions
+type ProvenWithdrawalParameters struct {
 	Nonce           *big.Int
 	Sender          common.Address
 	Target          common.Address
 	Value           *big.Int
 	GasLimit        *big.Int
-	BlockNumber     *big.Int
+	L2OutputIndex   *big.Int
 	Data            []byte
-	OutputRootProof bindings.HashingOutputRootProof
-	WithdrawalProof []byte // RLP Encoded list of trie nodes to prove L2 storage
+	OutputRootProof bindings.TypesOutputRootProof
+	WithdrawalProof [][]byte // List of trie nodes to prove L2 storage
 }
 
-// FinalizeWithdrawalParameters queries L2 to generate all withdrawal parameters and proof necessary to finalize an withdrawal on L1.
+// ProveWithdrawalParameters queries L1 & L2 to generate all withdrawal parameters and proof necessary to prove a withdrawal on L1.
 // The header provided is very important. It should be a block (timestamp) for which there is a submitted output in the L2 Output Oracle
 // contract. If not, the withdrawal will fail as it the storage proof cannot be verified if there is no submitted state root.
-func FinalizeWithdrawalParameters(ctx context.Context, l2client ProofClient, txHash common.Hash, header *types.Header) (FinalizedWithdrawalParameters, error) {
+func ProveWithdrawalParameters(ctx context.Context, proofCl ProofClient, l2ReceiptCl ReceiptClient, txHash common.Hash, header *types.Header, l2OutputOracleContract *bindings.L2OutputOracleCaller) (ProvenWithdrawalParameters, error) {
 	// Transaction receipt
-	receipt, err := l2client.TransactionReceipt(ctx, txHash)
+	receipt, err := l2ReceiptCl.TransactionReceipt(ctx, txHash)
 	if err != nil {
-		return FinalizedWithdrawalParameters{}, err
+		return ProvenWithdrawalParameters{}, err
 	}
 	// Parse the receipt
-	ev, err := ParseWithdrawalInitiated(receipt)
+	ev, err := ParseMessagePassed(receipt)
 	if err != nil {
-		return FinalizedWithdrawalParameters{}, err
+		return ProvenWithdrawalParameters{}, err
 	}
 	// Generate then verify the withdrawal proof
 	withdrawalHash, err := WithdrawalHash(ev)
+	if !bytes.Equal(withdrawalHash[:], ev.WithdrawalHash[:]) {
+		return ProvenWithdrawalParameters{}, errors.New("Computed withdrawal hash incorrectly")
+	}
 	if err != nil {
-		return FinalizedWithdrawalParameters{}, err
+		return ProvenWithdrawalParameters{}, err
 	}
 	slot := StorageSlotOfWithdrawalHash(withdrawalHash)
-	p, err := l2client.GetProof(ctx, predeploys.L2ToL1MessagePasserAddr, []string{slot.String()}, header.Number)
+	p, err := proofCl.GetProof(ctx, predeploys.L2ToL1MessagePasserAddr, []string{slot.String()}, header.Number)
 	if err != nil {
-		return FinalizedWithdrawalParameters{}, err
+		return ProvenWithdrawalParameters{}, err
+	}
+
+	// Fetch the L2OutputIndex from the L2 Output Oracle caller (on L1)
+	l2OutputIndex, err := l2OutputOracleContract.GetL2OutputIndexAfter(&bind.CallOpts{}, header.Number)
+	if err != nil {
+		return ProvenWithdrawalParameters{}, fmt.Errorf("failed to get l2OutputIndex: %w", err)
 	}
 	// TODO: Could skip this step, but it's nice to double check it
 	err = VerifyProof(header.Root, p)
 	if err != nil {
-		return FinalizedWithdrawalParameters{}, err
+		return ProvenWithdrawalParameters{}, err
 	}
 	if len(p.StorageProof) != 1 {
-		return FinalizedWithdrawalParameters{}, errors.New("invalid amount of storage proofs")
+		return ProvenWithdrawalParameters{}, errors.New("invalid amount of storage proofs")
 	}
 
 	// Encode it as expected by the contract
@@ -197,26 +191,21 @@ func FinalizeWithdrawalParameters(ctx context.Context, l2client ProofClient, txH
 		trieNodes[i] = common.FromHex(s)
 	}
 
-	withdrawalProof, err := rlp.EncodeToBytes(trieNodes)
-	if err != nil {
-		return FinalizedWithdrawalParameters{}, err
-	}
-
-	return FinalizedWithdrawalParameters{
-		Nonce:       ev.Nonce,
-		Sender:      ev.Sender,
-		Target:      ev.Target,
-		Value:       ev.Value,
-		GasLimit:    ev.GasLimit,
-		BlockNumber: new(big.Int).Set(header.Number),
-		Data:        ev.Data,
-		OutputRootProof: bindings.HashingOutputRootProof{
-			Version:               [32]byte{}, // Empty for version 1
-			StateRoot:             header.Root,
-			WithdrawerStorageRoot: p.StorageHash,
-			LatestBlockhash:       header.Hash(),
+	return ProvenWithdrawalParameters{
+		Nonce:         ev.Nonce,
+		Sender:        ev.Sender,
+		Target:        ev.Target,
+		Value:         ev.Value,
+		GasLimit:      ev.GasLimit,
+		L2OutputIndex: l2OutputIndex,
+		Data:          ev.Data,
+		OutputRootProof: bindings.TypesOutputRootProof{
+			Version:                  [32]byte{}, // Empty for version 1
+			StateRoot:                header.Root,
+			MessagePasserStorageRoot: p.StorageHash,
+			LatestBlockhash:          header.Hash(),
 		},
-		WithdrawalProof: withdrawalProof,
+		WithdrawalProof: trieNodes,
 	}, nil
 }
 
@@ -227,12 +216,13 @@ var (
 	AddressType, _ = abi.NewType("address", "", nil)
 )
 
-// WithdrawalHash computes the hash of the withdrawal that was stored in the L2 withdrawal contract state.
+// WithdrawalHash computes the hash of the withdrawal that was stored in the L2toL1MessagePasser
+// contract state.
 // TODO:
-// 	- I don't like having to use the ABI Generated struct
-// 	- There should be a better way to run the ABI encoding
-//	- These needs to be fuzzed against the solidity
-func WithdrawalHash(ev *bindings.L2ToL1MessagePasserWithdrawalInitiated) (common.Hash, error) {
+//   - I don't like having to use the ABI Generated struct
+//   - There should be a better way to run the ABI encoding
+//   - These needs to be fuzzed against the solidity
+func WithdrawalHash(ev *bindings.L2ToL1MessagePasserMessagePassed) (common.Hash, error) {
 	//  abi.encode(nonce, msg.sender, _target, msg.value, _gasLimit, _data)
 	args := abi.Arguments{
 		{Name: "nonce", Type: Uint256Type},
@@ -249,30 +239,36 @@ func WithdrawalHash(ev *bindings.L2ToL1MessagePasserWithdrawalInitiated) (common
 	return crypto.Keccak256Hash(enc), nil
 }
 
-// ParseWithdrawalInitiated parses
-func ParseWithdrawalInitiated(receipt *types.Receipt) (*bindings.L2ToL1MessagePasserWithdrawalInitiated, error) {
+// ParseMessagePassed parses MessagePassed events from
+// a transaction receipt. It does not support multiple withdrawals
+// per receipt.
+func ParseMessagePassed(receipt *types.Receipt) (*bindings.L2ToL1MessagePasserMessagePassed, error) {
 	contract, err := bindings.NewL2ToL1MessagePasser(common.Address{}, nil)
 	if err != nil {
 		return nil, err
 	}
-	if len(receipt.Logs) != 1 {
-		return nil, errors.New("invalid length of logs")
+
+	for _, log := range receipt.Logs {
+		if len(log.Topics) == 0 || log.Topics[0] != MessagePassedTopic {
+			continue
+		}
+
+		ev, err := contract.ParseMessagePassed(*log)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse log: %w", err)
+		}
+		return ev, nil
 	}
-	ev, err := contract.ParseWithdrawalInitiated(*receipt.Logs[0])
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse log: %w", err)
-	}
-	return ev, nil
+	return nil, errors.New("Unable to find MessagePassed event")
 }
 
-// StorageSlotOfWithdrawalHash determines the storage slot of the Withdrawer contract to look at
+// StorageSlotOfWithdrawalHash determines the storage slot of the L2ToL1MessagePasser contract to look at
 // given a WithdrawalHash
 func StorageSlotOfWithdrawalHash(hash common.Hash) common.Hash {
-	// The withdrawals mapping is the second (0 indexed) storage element in the Withdrawer contract.
+	// The withdrawals mapping is the 0th storage slot in the L2ToL1MessagePasser contract.
 	// To determine the storage slot, use keccak256(withdrawalHash ++ p)
 	// Where p is the 32 byte value of the storage slot and ++ is concatenation
 	buf := make([]byte, 64)
 	copy(buf, hash[:])
-	buf[63] = 1
 	return crypto.Keccak256Hash(buf)
 }

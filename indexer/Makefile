@@ -7,11 +7,8 @@ LDFLAGSSTRING +=-X main.GitDate=$(GITDATE)
 LDFLAGSSTRING +=-X main.GitVersion=$(GITVERSION)
 LDFLAGS := -ldflags "$(LDFLAGSSTRING)"
 
-L1BRIDGE_ABI_ARTIFACT = ../packages/contracts/artifacts/contracts/L1/messaging/L1StandardBridge.sol/L1StandardBridge.json
-L2BRIDGE_ABI_ARTIFACT = ../packages/contracts/artifacts/contracts/L2/messaging/L2StandardBridge.sol/L2StandardBridge.json
-
-ERC20_ABI_ARTIFACT = ./contracts/ERC20.sol/ERC20.json
-
+# Note: Requires legacy contracts to be built before
+# running and binding-related Make targets.
 SCC_ABI_ARTIFACT = ../packages/contracts/artifacts/contracts/L1/rollup/StateCommitmentChain.sol/StateCommitmentChain.json
 
 indexer:
@@ -26,71 +23,7 @@ test:
 lint:
 	golangci-lint run ./...
 
-bindings: bindings-l1bridge bindings-l2bridge bindings-l1erc20 bindings-l2erc20 bindings-scc
-
-bindings-l1bridge:
-	$(eval temp := $(shell mktemp))
-
-	cat $(L1BRIDGE_ABI_ARTIFACT) \
-		| jq -r .bytecode > $(temp)
-
-	cat $(L1BRIDGE_ABI_ARTIFACT) \
-		| jq .abi \
-		| abigen --pkg l1bridge \
-		--abi - \
-		--out bindings/l1bridge/l1_standard_bridge.go \
-		--type L1StandardBridge \
-		--bin $(temp)
-
-	rm $(temp)
-
-bindings-l2bridge:
-	$(eval temp := $(shell mktemp))
-
-	cat $(L2BRIDGE_ABI_ARTIFACT) \
-		| jq -r .bytecode > $(temp)
-
-	cat $(L2BRIDGE_ABI_ARTIFACT) \
-		| jq .abi \
-		| abigen --pkg l2bridge \
-		--abi - \
-		--out bindings/l2bridge/l2_standard_bridge.go \
-		--type L2StandardBridge \
-		--bin $(temp)
-
-	rm $(temp)
-
-bindings-l1erc20:
-	$(eval temp := $(shell mktemp))
-
-	cat $(ERC20_ABI_ARTIFACT) \
-		| jq -r .bytecode > $(temp)
-
-	cat $(ERC20_ABI_ARTIFACT) \
-		| jq .abi \
-		| abigen --pkg l1erc20 \
-		--abi - \
-		--out bindings/l1erc20/l1erc20.go \
-		--type L1ERC20 \
-		--bin $(temp)
-
-	rm $(temp)
-
-bindings-l2erc20:
-	$(eval temp := $(shell mktemp))
-
-	cat $(ERC20_ABI_ARTIFACT) \
-		| jq -r .bytecode > $(temp)
-
-	cat $(ERC20_ABI_ARTIFACT) \
-		| jq .abi \
-		| abigen --pkg l2erc20 \
-		--abi - \
-		--out bindings/l2erc20/l2erc20.go \
-		--type L2ERC20 \
-		--bin $(temp)
-
-	rm $(temp)
+bindings: bindings-scc
 
 bindings-scc:
 	$(eval temp := $(shell mktemp))
@@ -111,10 +44,6 @@ bindings-scc:
 .PHONY: \
 	indexer \
 	bindings \
-	bindings-l1bridge \
-	bindings-l2bridge \
-	bindings-l1erc20 \
-	bindings-l2erc20 \
 	bindings-scc \
 	clean \
 	test \

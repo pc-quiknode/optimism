@@ -10,6 +10,8 @@ import {
 import { CrossChainMessenger, MessageStatus } from '@eth-optimism/sdk'
 import { Provider } from '@ethersproject/abstract-provider'
 
+import { version } from '../package.json'
+
 type MessageRelayerOptions = {
   l1RpcProvider: Provider
   l2RpcProvider: Provider
@@ -37,30 +39,27 @@ export class MessageRelayerService extends BaseServiceV2<
 > {
   constructor(options?: Partial<MessageRelayerOptions>) {
     super({
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      version: require('../package.json').version,
+      version,
       name: 'message-relayer',
       options,
       optionsSpec: {
         l1RpcProvider: {
           validator: validators.provider,
           desc: 'Provider for interacting with L1.',
-          secret: true,
         },
         l2RpcProvider: {
           validator: validators.provider,
           desc: 'Provider for interacting with L2.',
-          secret: true,
         },
         l1Wallet: {
           validator: validators.wallet,
           desc: 'Wallet used to interact with L1.',
-          secret: true,
         },
         fromL2TransactionIndex: {
           validator: validators.num,
           desc: 'Index of the first L2 transaction to start processing from.',
           default: 0,
+          public: true,
         },
       },
       metricsSpec: {

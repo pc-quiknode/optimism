@@ -9,31 +9,40 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-node/eth"
-
-	"github.com/ethereum/go-ethereum/common"
-	lru "github.com/hashicorp/golang-lru"
-
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/golang/snappy"
-	"github.com/libp2p/go-libp2p-core/host"
-	"github.com/libp2p/go-libp2p-core/peer"
+	lru "github.com/hashicorp/golang-lru"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pb "github.com/libp2p/go-libp2p-pubsub/pb"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/peer"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
+
+	"github.com/ethereum-optimism/optimism/op-node/eth"
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
 )
 
-func init() {
-	// TODO: a PR is open to make this configurable upstream as option instead of having to override a global
-	// https://github.com/libp2p/go-libp2p-pubsub/pull/484
-	pubsub.TimeCacheDuration = 80 * pubsub.GossipSubHeartbeatInterval
-}
-
-const maxGossipSize = 1 << 20
-const maxOutboundQueue = 256
-const maxValidateQueue = 256
-const globalValidateThrottle = 512
+const (
+	// maxGossipSize limits the total size of gossip RPC containers as well as decompressed individual messages.
+	maxGossipSize = 10 * (1 << 20)
+	// minGossipSize is used to make sure that there is at least some data to validate the signature against.
+	minGossipSize          = 66
+	maxOutboundQueue       = 256
+	maxValidateQueue       = 256
+	globalValidateThrottle = 512
+	gossipHeartbeat        = 500 * time.Millisecond
+	// seenMessagesTTL limits the duration that message IDs are remembered for gossip deduplication purposes
+	// 130 * gossipHeartbeat
+	seenMessagesTTL  = 130 * gossipHeartbeat
+	DefaultMeshD     = 8  // topic stable mesh target count
+	DefaultMeshDlo   = 6  // topic stable mesh low watermark
+	DefaultMeshDhi   = 12 // topic stable mesh high watermark
+	DefaultMeshDlazy = 6  // gossip target
+	// peerScoreInspectFrequency is the frequency at which peer scores are inspected
+	peerScoreInspectFrequency = 15 * time.Second
+)
 
 // Message domains, the msg id function uncompresses to keep data monomorphic,
 // but invalid compressed data will need a unique different id.
@@ -41,7 +50,22 @@ const globalValidateThrottle = 512
 var MessageDomainInvalidSnappy = [4]byte{0, 0, 0, 0}
 var MessageDomainValidSnappy = [4]byte{1, 0, 0, 0}
 
-const MaxGossipSize = 1 << 20
+type GossipSetupConfigurables interface {
+	PeerScoringParams() *pubsub.PeerScoreParams
+	TopicScoringParams() *pubsub.TopicScoreParams
+	BanPeers() bool
+	ConfigureGossip(params *pubsub.GossipSubParams) []pubsub.Option
+}
+
+type GossipRuntimeConfig interface {
+	P2PSequencerAddress() common.Address
+}
+
+//go:generate mockery --name GossipMetricer
+type GossipMetricer interface {
+	RecordGossipEvent(evType int32)
+	RecordPeerScoring(peerID peer.ID, score float64)
+}
 
 func blocksTopicV1(cfg *rollup.Config) string {
 	return fmt.Sprintf("/optimism/%s/0/blocks", cfg.L2ChainID.String())
@@ -55,7 +79,7 @@ func BuildSubscriptionFilter(cfg *rollup.Config) pubsub.SubscriptionFilter {
 
 var msgBufPool = sync.Pool{New: func() any {
 	// note: the topic validator concurrency is limited, so pool won't blow up, even with large pre-allocation.
-	x := make([]byte, 0, MaxGossipSize)
+	x := make([]byte, 0, maxGossipSize)
 	return &x
 }}
 
@@ -69,7 +93,7 @@ func BuildMsgIdFn(cfg *rollup.Config) pubsub.MsgIdFunction {
 		// The validator can throw away the message later when recognized as invalid,
 		// and the unique hash helps detect duplicates.
 		dLen, err := snappy.DecodedLen(pmsg.Data)
-		if err == nil && dLen <= MaxGossipSize {
+		if err == nil && dLen <= maxGossipSize {
 			res := msgBufPool.Get().(*[]byte)
 			defer msgBufPool.Put(res)
 			if data, err = snappy.Decode((*res)[:0], pmsg.Data); err == nil {
@@ -98,26 +122,41 @@ func BuildMsgIdFn(cfg *rollup.Config) pubsub.MsgIdFunction {
 	}
 }
 
+func (p *Config) ConfigureGossip(params *pubsub.GossipSubParams) []pubsub.Option {
+	params.D = p.MeshD
+	params.Dlo = p.MeshDLo
+	params.Dhi = p.MeshDHi
+	params.Dlazy = p.MeshDLazy
+
+	// in the future we may add more advanced options like scoring and PX / direct-mesh / episub
+	return []pubsub.Option{
+		pubsub.WithFloodPublish(p.FloodPublish),
+	}
+}
+
 func BuildGlobalGossipParams(cfg *rollup.Config) pubsub.GossipSubParams {
 	params := pubsub.DefaultGossipSubParams()
-	params.D = 8                                      // topic stable mesh target count
-	params.Dlo = 6                                    // topic stable mesh low watermark
-	params.Dhi = 12                                   // topic stable mesh high watermark
-	params.Dlazy = 6                                  // gossip target
-	params.HeartbeatInterval = 500 * time.Millisecond // interval of heartbeat
-	params.FanoutTTL = 24 * time.Second               // ttl for fanout maps for topics we are not subscribed to but have published to
-	params.HistoryLength = 12                         // number of windows to retain full messages in cache for IWANT responses
-	params.HistoryGossip = 3                          // number of windows to gossip about
+	params.D = DefaultMeshD                    // topic stable mesh target count
+	params.Dlo = DefaultMeshDlo                // topic stable mesh low watermark
+	params.Dhi = DefaultMeshDhi                // topic stable mesh high watermark
+	params.Dlazy = DefaultMeshDlazy            // gossip target
+	params.HeartbeatInterval = gossipHeartbeat // interval of heartbeat
+	params.FanoutTTL = 24 * time.Second        // ttl for fanout maps for topics we are not subscribed to but have published to
+	params.HistoryLength = 12                  // number of windows to retain full messages in cache for IWANT responses
+	params.HistoryGossip = 3                   // number of windows to gossip about
 
 	return params
 }
 
-func NewGossipSub(p2pCtx context.Context, h host.Host, cfg *rollup.Config) (*pubsub.PubSub, error) {
+// NewGossipSub configures a new pubsub instance with the specified parameters.
+// PubSub uses a GossipSubRouter as it's router under the hood.
+func NewGossipSub(p2pCtx context.Context, h host.Host, g ConnectionGater, cfg *rollup.Config, gossipConf GossipSetupConfigurables, m GossipMetricer, log log.Logger) (*pubsub.PubSub, error) {
 	denyList, err := pubsub.NewTimeCachedBlacklist(30 * time.Second)
 	if err != nil {
 		return nil, err
 	}
-	return pubsub.NewGossipSub(p2pCtx, h,
+	params := BuildGlobalGossipParams(cfg)
+	gossipOpts := []pubsub.Option{
 		pubsub.WithMaxMessageSize(maxGossipSize),
 		pubsub.WithMessageIdFn(BuildMsgIdFn(cfg)),
 		pubsub.WithNoAuthor(),
@@ -126,11 +165,15 @@ func NewGossipSub(p2pCtx context.Context, h host.Host, cfg *rollup.Config) (*pub
 		pubsub.WithValidateQueueSize(maxValidateQueue),
 		pubsub.WithPeerOutboundQueueSize(maxOutboundQueue),
 		pubsub.WithValidateThrottle(globalValidateThrottle),
+		pubsub.WithSeenMessagesTTL(seenMessagesTTL),
 		pubsub.WithPeerExchange(false),
 		pubsub.WithBlacklist(denyList),
-		pubsub.WithGossipSubParams(BuildGlobalGossipParams(cfg)),
-	)
-	// TODO: pubsub.WithPeerScoreInspect(inspect, InspectInterval) to update peerstore scores with gossip scores
+		pubsub.WithGossipSubParams(params),
+		pubsub.WithEventTracer(&gossipTracer{m: m}),
+	}
+	gossipOpts = append(gossipOpts, ConfigurePeerScoring(h, g, gossipConf, m, log)...)
+	gossipOpts = append(gossipOpts, gossipConf.ConfigureGossip(&params)...)
+	return pubsub.NewGossipSub(p2pCtx, h, gossipOpts...)
 }
 
 func validationResultString(v pubsub.ValidationResult) string {
@@ -149,13 +192,25 @@ func validationResultString(v pubsub.ValidationResult) string {
 func logValidationResult(self peer.ID, msg string, log log.Logger, fn pubsub.ValidatorEx) pubsub.ValidatorEx {
 	return func(ctx context.Context, id peer.ID, message *pubsub.Message) pubsub.ValidationResult {
 		res := fn(ctx, id, message)
-		var src interface{}
+		var src any
 		src = id
 		if id == self {
 			src = "self"
 		}
 		log.Debug(msg, "result", validationResultString(res), "from", src)
 		return res
+	}
+}
+
+func guardGossipValidator(log log.Logger, fn pubsub.ValidatorEx) pubsub.ValidatorEx {
+	return func(ctx context.Context, id peer.ID, message *pubsub.Message) (result pubsub.ValidationResult) {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Error("gossip validation panic", "err", err, "peer", id)
+				result = pubsub.ValidationReject
+			}
+		}()
+		return fn(ctx, id, message)
 	}
 }
 
@@ -183,13 +238,13 @@ func (sb *seenBlocks) markSeen(h common.Hash) {
 	sb.blockHashes = append(sb.blockHashes, h)
 }
 
-func BuildBlocksValidator(log log.Logger, cfg *rollup.Config) pubsub.ValidatorEx {
+func BuildBlocksValidator(log log.Logger, cfg *rollup.Config, runCfg GossipRuntimeConfig) pubsub.ValidatorEx {
 
 	// Seen block hashes per block height
 	// uint64 -> *seenBlocks
-	blockHeightLRU, err := lru.New(100)
+	blockHeightLRU, err := lru.New(1000)
 	if err != nil {
-		panic(fmt.Errorf("failed to set up block height LRU cache: %v", err))
+		panic(fmt.Errorf("failed to set up block height LRU cache: %w", err))
 	}
 
 	return func(ctx context.Context, id peer.ID, message *pubsub.Message) pubsub.ValidationResult {
@@ -201,6 +256,10 @@ func BuildBlocksValidator(log log.Logger, cfg *rollup.Config) pubsub.ValidatorEx
 		}
 		if outLen > maxGossipSize {
 			log.Warn("possible snappy zip bomb, decoded length is too large", "decoded_length", outLen, "peer", id)
+			return pubsub.ValidationReject
+		}
+		if outLen < minGossipSize {
+			log.Warn("rejecting undersized gossip payload")
 			return pubsub.ValidationReject
 		}
 
@@ -215,6 +274,12 @@ func BuildBlocksValidator(log log.Logger, cfg *rollup.Config) pubsub.ValidatorEx
 
 		// message starts with compact-encoding secp256k1 encoded signature
 		signatureBytes, payloadBytes := data[:65], data[65:]
+
+		// [REJECT] if the signature by the sequencer is not valid
+		result := verifyBlockSignature(log, cfg, runCfg, id, signatureBytes, payloadBytes)
+		if result != pubsub.ValidationAccept {
+			return result
+		}
 
 		// [REJECT] if the block encoding is not valid
 		var payload eth.ExecutionPayload
@@ -260,22 +325,6 @@ func BuildBlocksValidator(log log.Logger, cfg *rollup.Config) pubsub.ValidatorEx
 			return pubsub.ValidationIgnore
 		}
 
-		// [REJECT] if the signature by the sequencer is not valid
-		signingHash := BlockSigningHash(cfg, payloadBytes)
-
-		pub, err := crypto.SigToPub(signingHash[:], signatureBytes)
-		if err != nil {
-			log.Warn("invalid block signature", "err", err, "peer", id)
-			return pubsub.ValidationReject
-		}
-		addr := crypto.PubkeyToAddress(*pub)
-
-		// TODO: in the future we can support multiple valid p2p addresses.
-		if addr != cfg.P2PSequencerAddress {
-			log.Warn("unexpected block author", "err", err, "peer", id)
-			return pubsub.ValidationReject
-		}
-
 		// mark it as seen. (note: with concurrent validation more than 5 blocks may be marked as seen still,
 		// but validator concurrency is limited anyway)
 		seen.(*seenBlocks).markSeen(payload.BlockHash)
@@ -284,6 +333,51 @@ func BuildBlocksValidator(log log.Logger, cfg *rollup.Config) pubsub.ValidatorEx
 		message.ValidatorData = &payload
 		return pubsub.ValidationAccept
 	}
+}
+
+func verifyBlockSignature(log log.Logger, cfg *rollup.Config, runCfg GossipRuntimeConfig, id peer.ID, signatureBytes []byte, payloadBytes []byte) pubsub.ValidationResult {
+	result := verifyBlockSignatureWithHasher(nil, cfg, runCfg, id, signatureBytes, payloadBytes, LegacyBlockSigningHash)
+	if result != pubsub.ValidationAccept {
+		return verifyBlockSignatureWithHasher(log, cfg, runCfg, id, signatureBytes, payloadBytes, BlockSigningHash)
+	}
+	return result
+}
+
+func verifyBlockSignatureWithHasher(log log.Logger, cfg *rollup.Config, runCfg GossipRuntimeConfig, id peer.ID, signatureBytes []byte, payloadBytes []byte, hasher func(cfg *rollup.Config, payloadBytes []byte) (common.Hash, error)) pubsub.ValidationResult {
+	signingHash, err := hasher(cfg, payloadBytes)
+	if err != nil {
+		if log != nil {
+			log.Warn("failed to compute block signing hash", "err", err, "peer", id)
+		}
+		return pubsub.ValidationReject
+	}
+
+	pub, err := crypto.SigToPub(signingHash[:], signatureBytes)
+	if err != nil {
+		if log != nil {
+			log.Warn("invalid block signature", "err", err, "peer", id)
+		}
+		return pubsub.ValidationReject
+	}
+	addr := crypto.PubkeyToAddress(*pub)
+
+	// In the future we may load & validate block metadata before checking the signature.
+	// And then check the signer based on the metadata, to support e.g. multiple p2p signers at the same time.
+	// For now we only have one signer at a time and thus check the address directly.
+	// This means we may drop old payloads upon key rotation,
+	// but this can be recovered from like any other missed unsafe payload.
+	if expected := runCfg.P2PSequencerAddress(); expected == (common.Address{}) {
+		if log != nil {
+			log.Warn("no configured p2p sequencer address, ignoring gossiped block", "peer", id, "addr", addr)
+		}
+		return pubsub.ValidationIgnore
+	} else if addr != expected {
+		if log != nil {
+			log.Warn("unexpected block author", "err", err, "peer", id, "addr", addr, "expected", expected)
+		}
+		return pubsub.ValidationReject
+	}
+	return pubsub.ValidationAccept
 }
 
 type GossipIn interface {
@@ -304,6 +398,7 @@ type publisher struct {
 	log         log.Logger
 	cfg         *rollup.Config
 	blocksTopic *pubsub.Topic
+	runCfg      GossipRuntimeConfig
 }
 
 var _ GossipOut = (*publisher)(nil)
@@ -322,13 +417,13 @@ func (p *publisher) PublishL2Payload(ctx context.Context, payload *eth.Execution
 
 	buf.Write(make([]byte, 65))
 	if _, err := payload.MarshalSSZ(buf); err != nil {
-		return fmt.Errorf("failed to encoded execution payload to publish: %v", err)
+		return fmt.Errorf("failed to encoded execution payload to publish: %w", err)
 	}
 	data := buf.Bytes()
 	payloadData := data[65:]
 	sig, err := signer.Sign(ctx, SigningDomainBlocksV1, p.cfg.L2ChainID, payloadData)
 	if err != nil {
-		return fmt.Errorf("failed to sign execution payload with signer: %v", err)
+		return fmt.Errorf("failed to sign execution payload with signer: %w", err)
 	}
 	copy(data[:65], sig[:])
 
@@ -343,48 +438,51 @@ func (p *publisher) Close() error {
 	return p.blocksTopic.Close()
 }
 
-func JoinGossip(p2pCtx context.Context, self peer.ID, ps *pubsub.PubSub, log log.Logger, cfg *rollup.Config, gossipIn GossipIn) (GossipOut, error) {
-	val := logValidationResult(self, "validated block", log, BuildBlocksValidator(log, cfg))
+func JoinGossip(p2pCtx context.Context, self peer.ID, topicScoreParams *pubsub.TopicScoreParams, ps *pubsub.PubSub, log log.Logger, cfg *rollup.Config, runCfg GossipRuntimeConfig, gossipIn GossipIn) (GossipOut, error) {
+	val := guardGossipValidator(log, logValidationResult(self, "validated block", log, BuildBlocksValidator(log, cfg, runCfg)))
 	blocksTopicName := blocksTopicV1(cfg)
 	err := ps.RegisterTopicValidator(blocksTopicName,
 		val,
 		pubsub.WithValidatorTimeout(3*time.Second),
 		pubsub.WithValidatorConcurrency(4))
 	if err != nil {
-		return nil, fmt.Errorf("failed to register blocks gossip topic: %v", err)
+		return nil, fmt.Errorf("failed to register blocks gossip topic: %w", err)
 	}
 	blocksTopic, err := ps.Join(blocksTopicName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to join blocks gossip topic: %v", err)
+		return nil, fmt.Errorf("failed to join blocks gossip topic: %w", err)
 	}
 	blocksTopicEvents, err := blocksTopic.EventHandler()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create blocks gossip topic handler: %v", err)
+		return nil, fmt.Errorf("failed to create blocks gossip topic handler: %w", err)
 	}
 	go LogTopicEvents(p2pCtx, log.New("topic", "blocks"), blocksTopicEvents)
 
-	// TODO: block topic scoring parameters
-	// See prysm: https://github.com/prysmaticlabs/prysm/blob/develop/beacon-chain/p2p/gossip_scoring_params.go
-	// And research from lighthouse: https://gist.github.com/blacktemplar/5c1862cb3f0e32a1a7fb0b25e79e6e2c
-	// And docs: https://github.com/libp2p/specs/blob/master/pubsub/gossipsub/gossipsub-v1.1.md#topic-parameter-calculation-and-decay
-	//err := blocksTopic.SetScoreParams(&pubsub.TopicScoreParams{......})
+	// A [TimeInMeshQuantum] value of 0 means the topic score is disabled.
+	// If we passed a topicScoreParams with [TimeInMeshQuantum] set to 0,
+	// libp2p errors since the params will be rejected.
+	if topicScoreParams != nil && topicScoreParams.TimeInMeshQuantum != 0 {
+		if err = blocksTopic.SetScoreParams(topicScoreParams); err != nil {
+			return nil, fmt.Errorf("failed to set topic score params: %w", err)
+		}
+	}
 
 	subscription, err := blocksTopic.Subscribe()
 	if err != nil {
-		return nil, fmt.Errorf("failed to subscribe to blocks gossip topic: %v", err)
+		return nil, fmt.Errorf("failed to subscribe to blocks gossip topic: %w", err)
 	}
 
 	subscriber := MakeSubscriber(log, BlocksHandler(gossipIn.OnUnsafeL2Payload))
 	go subscriber(p2pCtx, subscription)
 
-	return &publisher{log: log, cfg: cfg, blocksTopic: blocksTopic}, nil
+	return &publisher{log: log, cfg: cfg, blocksTopic: blocksTopic, runCfg: runCfg}, nil
 }
 
 type TopicSubscriber func(ctx context.Context, sub *pubsub.Subscription)
-type MessageHandler func(ctx context.Context, from peer.ID, msg interface{}) error
+type MessageHandler func(ctx context.Context, from peer.ID, msg any) error
 
 func BlocksHandler(onBlock func(ctx context.Context, from peer.ID, msg *eth.ExecutionPayload) error) MessageHandler {
-	return func(ctx context.Context, from peer.ID, msg interface{}) error {
+	return func(ctx context.Context, from peer.ID, msg any) error {
 		payload, ok := msg.(*eth.ExecutionPayload)
 		if !ok {
 			return fmt.Errorf("expected topic validator to parse and validate data into execution payload, but got %T", msg)
@@ -428,5 +526,15 @@ func LogTopicEvents(ctx context.Context, log log.Logger, evHandler *pubsub.Topic
 		default:
 			log.Warn("unrecognized topic event", "ev", ev)
 		}
+	}
+}
+
+type gossipTracer struct {
+	m GossipMetricer
+}
+
+func (g *gossipTracer) Trace(evt *pb.TraceEvent) {
+	if g.m != nil {
+		g.m.RecordGossipEvent(int32(*evt.Type))
 	}
 }

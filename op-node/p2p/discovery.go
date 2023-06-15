@@ -11,18 +11,31 @@ import (
 	"net"
 	"time"
 
-	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	decredSecp "github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
+
 	gcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/libp2p/go-libp2p-core/crypto"
-	"github.com/libp2p/go-libp2p-core/network"
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/multiformats/go-multiaddr"
+
+	"github.com/btcsuite/btcd/blockchain"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
 )
+
+// force to use the new chainhash module, and not the legacy chainhash package btcd module
+const _ = chainhash.HashSize
+
+// force to use the btcd module, while the keycard dependency in geth still depends on it,
+// for go mod tidy to not clean up our explicit usage of v0.23.3, which resolves conflicts with the chainhash module
+const _ = blockchain.CoinbaseWitnessDataLen
 
 const (
 	discoverIntervalFast   = time.Second * 5
@@ -41,15 +54,17 @@ func (conf *Config) Discovery(log log.Logger, rollupCfg *rollup.Config, tcpPort 
 	if conf.NoDiscovery {
 		return nil, nil, nil
 	}
-	priv := *conf.Priv
+	priv := (*decredSecp.PrivateKey)(conf.Priv).ToECDSA()
 	// use the geth curve definition. Same crypto, but geth needs to detect it as *their* definition of the curve.
 	priv.Curve = gcrypto.S256()
-	localNode := enode.NewLocalNode(conf.DiscoveryDB, &priv)
+	localNode := enode.NewLocalNode(conf.DiscoveryDB, priv)
 	if conf.AdvertiseIP != nil {
 		localNode.SetStaticIP(conf.AdvertiseIP)
 	}
-	if conf.AdvertiseUDPPort != 0 {
+	if conf.AdvertiseUDPPort != 0 { // explicitly advertised port gets priority
 		localNode.SetFallbackUDP(int(conf.AdvertiseUDPPort))
+	} else if conf.ListenUDPPort != 0 { // otherwise default to the port we configured it to listen on
+		localNode.SetFallbackUDP(int(conf.ListenUDPPort))
 	}
 	if conf.AdvertiseTCPPort != 0 { // explicitly advertised port gets priority
 		localNode.Set(enr.TCP(conf.AdvertiseTCPPort))
@@ -60,7 +75,7 @@ func (conf *Config) Discovery(log log.Logger, rollupCfg *rollup.Config, tcpPort 
 	} else {
 		return nil, nil, fmt.Errorf("no TCP port to put in discovery record")
 	}
-	dat := OptimismENRData{
+	dat := OpStackENRData{
 		chainID: rollupCfg.L2ChainID.Uint64(),
 		version: 0,
 	}
@@ -81,7 +96,7 @@ func (conf *Config) Discovery(log log.Logger, rollupCfg *rollup.Config, tcpPort 
 	}
 
 	cfg := discover.Config{
-		PrivateKey:   &priv,
+		PrivateKey:   priv,
 		NetRestrict:  nil,
 		Bootnodes:    conf.Bootnodes,
 		Unhandled:    nil, // Not used in dv5
@@ -101,7 +116,31 @@ func (conf *Config) Discovery(log log.Logger, rollupCfg *rollup.Config, tcpPort 
 	return localNode, udpV5, nil
 }
 
-func enrToAddrInfo(r *enode.Node) (*peer.AddrInfo, error) {
+// Secp256k1 is like the geth Secp256k1 enr entry type, but using the libp2p pubkey representation instead
+type Secp256k1 crypto.Secp256k1PublicKey
+
+func (v Secp256k1) ENRKey() string { return "secp256k1" }
+
+// EncodeRLP implements rlp.Encoder.
+func (v Secp256k1) EncodeRLP(w io.Writer) error {
+	return rlp.Encode(w, (*decredSecp.PublicKey)(&v).SerializeCompressed())
+}
+
+// DecodeRLP implements rlp.Decoder.
+func (v *Secp256k1) DecodeRLP(s *rlp.Stream) error {
+	buf, err := s.Bytes()
+	if err != nil {
+		return err
+	}
+	pk, err := decredSecp.ParsePubKey(buf)
+	if err != nil {
+		return err
+	}
+	*v = (Secp256k1)(*pk)
+	return nil
+}
+
+func enrToAddrInfo(r *enode.Node) (*peer.AddrInfo, *crypto.Secp256k1PublicKey, error) {
 	ip := r.IP()
 	ipScheme := "ip4"
 	if ip4 := ip.To4(); ip4 == nil {
@@ -111,31 +150,35 @@ func enrToAddrInfo(r *enode.Node) (*peer.AddrInfo, error) {
 	}
 	mAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/%s/%s/tcp/%d", ipScheme, ip.String(), r.TCP()))
 	if err != nil {
-		return nil, fmt.Errorf("could not construct multi addr: %v", err)
+		return nil, nil, fmt.Errorf("could not construct multi addr: %w", err)
 	}
-	pub := r.Pubkey()
-	peerID, err := peer.IDFromPublicKey((*crypto.Secp256k1PublicKey)(pub))
+	var enrPub Secp256k1
+	if err := r.Load(&enrPub); err != nil {
+		return nil, nil, fmt.Errorf("failed to load pubkey as libp2p pubkey type from ENR")
+	}
+	pub := (*crypto.Secp256k1PublicKey)(&enrPub)
+	peerID, err := peer.IDFromPublicKey(pub)
 	if err != nil {
-		return nil, fmt.Errorf("could not compute peer ID from pubkey for multi-addr: %v", err)
+		return nil, pub, fmt.Errorf("could not compute peer ID from pubkey for multi-addr: %w", err)
 	}
 	return &peer.AddrInfo{
 		ID:    peerID,
 		Addrs: []multiaddr.Multiaddr{mAddr},
-	}, nil
+	}, pub, nil
 }
 
-// The discovery ENRs are just key-value lists, and we filter them by records tagged with the "optimism" key,
+// The discovery ENRs are just key-value lists, and we filter them by records tagged with the "opstack" key,
 // and then check the chain ID and version.
-type OptimismENRData struct {
+type OpStackENRData struct {
 	chainID uint64
 	version uint64
 }
 
-func (o *OptimismENRData) ENRKey() string {
-	return "optimism"
+func (o *OpStackENRData) ENRKey() string {
+	return "opstack"
 }
 
-func (o *OptimismENRData) EncodeRLP(w io.Writer) error {
+func (o *OpStackENRData) EncodeRLP(w io.Writer) error {
 	out := make([]byte, 2*binary.MaxVarintLen64)
 	offset := binary.PutUvarint(out, o.chainID)
 	offset += binary.PutUvarint(out[offset:], o.version)
@@ -144,46 +187,46 @@ func (o *OptimismENRData) EncodeRLP(w io.Writer) error {
 	return rlp.Encode(w, out)
 }
 
-func (o *OptimismENRData) DecodeRLP(s *rlp.Stream) error {
+func (o *OpStackENRData) DecodeRLP(s *rlp.Stream) error {
 	b, err := s.Bytes()
 	if err != nil {
-		return fmt.Errorf("failed to decode outer ENR entry: %v", err)
+		return fmt.Errorf("failed to decode outer ENR entry: %w", err)
 	}
 	// We don't check the byte length: the below readers are limited, and the ENR itself has size limits.
-	// Future "optimism" entries may contain additional data, and will be tagged with a newer version etc.
+	// Future "opstack" entries may contain additional data, and will be tagged with a newer version etc.
 	r := bytes.NewReader(b)
 	chainID, err := binary.ReadUvarint(r)
 	if err != nil {
-		return fmt.Errorf("failed to read chain ID var int: %v", err)
+		return fmt.Errorf("failed to read chain ID var int: %w", err)
 	}
 	version, err := binary.ReadUvarint(r)
 	if err != nil {
-		return fmt.Errorf("failed to read version var int: %v", err)
+		return fmt.Errorf("failed to read version var int: %w", err)
 	}
 	o.chainID = chainID
 	o.version = version
 	return nil
 }
 
-var _ enr.Entry = (*OptimismENRData)(nil)
+var _ enr.Entry = (*OpStackENRData)(nil)
 
 func FilterEnodes(log log.Logger, cfg *rollup.Config) func(node *enode.Node) bool {
 	return func(node *enode.Node) bool {
-		var dat OptimismENRData
+		var dat OpStackENRData
 		err := node.Load(&dat)
 		// if the entry does not exist, or if it is invalid, then ignore the node
 		if err != nil {
-			log.Debug("discovered node record has no optimism info", "node", node.ID(), "err", err)
+			log.Trace("discovered node record has no opstack info", "node", node.ID(), "err", err)
 			return false
 		}
 		// check chain ID matches
 		if cfg.L2ChainID.Uint64() != dat.chainID {
-			log.Debug("discovered node record has no matching chain ID", "node", node.ID(), "got", dat.chainID, "expected", cfg.L2ChainID.Uint64())
+			log.Trace("discovered node record has no matching chain ID", "node", node.ID(), "got", dat.chainID, "expected", cfg.L2ChainID.Uint64())
 			return false
 		}
 		// check version matches
 		if dat.version != 0 {
-			log.Debug("discovered node record has no matching version", "node", node.ID(), "got", dat.version, "expected", 0)
+			log.Trace("discovered node record has no matching version", "node", node.ID(), "got", dat.version, "expected", 0)
 			return false
 		}
 		return true
@@ -304,22 +347,22 @@ func (n *NodeP2P) DiscoveryProcess(ctx context.Context, log log.Logger, cfg *rol
 			log.Info("stopped peer discovery")
 			return // no ctx error, expected close
 		case found := <-randomNodesCh:
-			var dat OptimismENRData
+			var dat OpStackENRData
 			if err := found.Load(&dat); err != nil { // we already filtered on chain ID and version
 				continue
 			}
-			info, err := enrToAddrInfo(found)
+			info, pub, err := enrToAddrInfo(found)
 			if err != nil {
 				continue
 			}
 			// We add the addresses to the peerstore, and update the address TTL.
 			//After that we stop using the address, assuming it may not be valid anymore (until we rediscover the node)
 			pstore.AddAddrs(info.ID, info.Addrs, discoveredAddrTTL)
-			_ = pstore.AddPubKey(info.ID, (*crypto.Secp256k1PublicKey)(found.Pubkey()))
+			_ = pstore.AddPubKey(info.ID, pub)
 			// Tag the peer, we'd rather have the connection manager prune away old peers,
 			// or peers on different chains, or anyone we have not seen via discovery.
 			// There is no tag score decay yet, so just set it to 42.
-			n.ConnectionManager().TagPeer(info.ID, fmt.Sprintf("optimism-%d-%d", dat.chainID, dat.version), 42)
+			n.ConnectionManager().TagPeer(info.ID, fmt.Sprintf("opstack-%d-%d", dat.chainID, dat.version), 42)
 			log.Debug("discovered peer", "peer", info.ID, "nodeID", found.ID(), "addr", info.Addrs[0])
 		case <-connectTicker.C:
 			connected := n.Host().Network().Peers()

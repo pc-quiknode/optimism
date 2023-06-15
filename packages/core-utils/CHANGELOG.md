@@ -1,5 +1,50 @@
 # @eth-optimism/core-utils
 
+## 0.12.0
+
+### Minor Changes
+
+- c975c9620: Add suppory for finalizing legacy withdrawals after the Bedrock migration
+
+### Patch Changes
+
+- 136ea1785: Refactors the L2OutputOracle to key the l2Outputs mapping by index instead of by L2 block number.
+
+## 0.11.0
+
+### Minor Changes
+
+- 1e76cdb86: Changes the type for Bedrock withdrawal proofs
+
+## 0.10.1
+
+### Patch Changes
+
+- 7215f4ce: Bump ethers to 5.7.0 globally
+- 206f6033: Fix outdated references to 'withdrawal contract'
+
+## 0.10.0
+
+### Minor Changes
+
+- dbfea116: Removes ethers as a dependency in favor of individual ethers sub-packages
+
+## 0.9.3
+
+### Patch Changes
+
+- 0df744f6: Implement basic OpNodeProvider
+- 8ae39154: Update deposit transaction type
+- dac4a9f0: Updates the SDK to be compatible with Bedrock (via the "bedrock: true" constructor param). Updates the build pipeline for contracts-bedrock to export a properly formatted dist folder that matches our other packages.
+
+## 0.9.2
+
+### Patch Changes
+
+- 0bf3b9b4: Add encoding and hashing functions for bedrock
+- 8d26459b: Remove subversion byte from deposit tx
+- 4477fe9f: Update deposit transaction serialization
+
 ## 0.9.1
 
 ### Patch Changes

@@ -1,5 +1,71 @@
 # @eth-optimism/indexer
 
+## 0.7.0
+
+### Minor Changes
+
+- ed50bd5b4: Bump indexer
+
+## 0.6.0
+
+### Minor Changes
+
+- ecf0cc59b: Fix startup issues, add L2 conf depth
+
+## 0.5.0
+
+### Minor Changes
+
+- f030d8660: Adds support for the OptimismPortal's new `WithdrawalProven` event to the indexer
+
+## 0.4.0
+
+### Minor Changes
+
+- 1bfe79f20: Adds an implementation of the Two Step Withdrawals V2 proposal
+
+### Patch Changes
+
+- f49b71d50: Updated forge-std version
+
+## 0.3.3
+
+### Patch Changes
+
+- 587f309bf: Fix the docker build
+
+## 0.3.2
+
+### Patch Changes
+
+- f505078be: Update go-ethereum to v1.10.26
+
+## 0.3.1
+
+### Patch Changes
+
+- 4006ef3a: Delete unused flags
+
+## 0.3.0
+
+### Minor Changes
+
+- 19e581d8: Bedrock support
+
+## 0.2.0
+
+### Minor Changes
+
+- 4b0d5109: This release supports bedrock contracts and is configured for the public alpha testnet on goerli.
+
+## 0.1.4
+
+### Patch Changes
+
+- 74babaa4: Delete dead file
+- 3e67f784: Update go-ethereum to 1.10.21
+- ec8d6b7c: Remove some duplicated code
+
 ## 0.1.3
 
 ### Patch Changes

@@ -1,5 +1,6 @@
 COMPOSEFLAGS=-d
 ITESTS_L2_HOST=http://localhost:9545
+BEDROCK_TAGS_REMOTE?=origin
 
 build: build-go build-ts
 .PHONY: build
@@ -40,11 +41,12 @@ op-proposer:
 .PHONY: op-proposer
 
 mod-tidy:
-	cd ./op-node && go mod tidy && cd .. && \
-	cd ./op-proposer && go mod tidy && cd ..  && \
-	cd ./op-batcher && go mod tidy && cd ..  && \
-	cd ./op-bindings && go mod tidy && cd ..  && \
-	cd ./op-e2e && go mod tidy && cd ..
+	# Below GOPRIVATE line allows mod-tidy to be run immediately after
+	# releasing new versions. This bypasses the Go modules proxy, which
+	# can take a while to index new versions.
+	#
+	# See https://proxy.golang.org/ for more info.
+	export GOPRIVATE="github.com/ethereum-optimism" && go mod tidy
 .PHONY: mod-tidy
 
 clean:
@@ -58,6 +60,10 @@ nuke: clean devnet-clean
 devnet-up:
 	@bash ./ops-bedrock/devnet-up.sh
 .PHONY: devnet-up
+
+devnet-up-deploy:
+	PYTHONPATH=./bedrock-devnet python3 ./bedrock-devnet/main.py --monorepo-dir=.
+.PHONY: devnet-up-deploy
 
 devnet-down:
 	@(cd ./ops-bedrock && GENESIS_TIMESTAMP=$(shell date +%s) docker-compose stop)
@@ -93,3 +99,16 @@ semgrep:
 	$(eval DEV_REF := $(shell git rev-parse develop))
 	SEMGREP_REPO_NAME=ethereum-optimism/optimism semgrep ci --baseline-commit=$(DEV_REF)
 .PHONY: semgrep
+
+clean-node-modules:
+	rm -rf node_modules
+	rm -rf packages/**/node_modules
+
+
+tag-bedrock-go-modules:
+	./ops/scripts/tag-bedrock-go-modules.sh $(BEDROCK_TAGS_REMOTE) $(VERSION)
+.PHONY: tag-bedrock-go-modules
+
+update-op-geth:
+	./ops/scripts/update-op-geth.py
+.PHONY: update-op-geth

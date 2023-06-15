@@ -8,68 +8,84 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
+	"github.com/ethereum-optimism/optimism/op-node/chaincfg"
+	"github.com/ethereum-optimism/optimism/op-node/sources"
+	oppprof "github.com/ethereum-optimism/optimism/op-service/pprof"
+
+	"github.com/urfave/cli"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-node/flags"
 	"github.com/ethereum-optimism/optimism/op-node/node"
-	"github.com/ethereum-optimism/optimism/op-node/p2p"
+	p2pcli "github.com/ethereum-optimism/optimism/op-node/p2p/cli"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
-	"github.com/urfave/cli"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
 )
 
 // NewConfig creates a Config from the provided flags or environment variables.
 func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
+	if err := flags.CheckRequired(ctx); err != nil {
+		return nil, err
+	}
+
 	rollupConfig, err := NewRollupConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	driverConfig, err := NewDriverConfig(ctx)
+	driverConfig := NewDriverConfig(ctx)
+
+	p2pSignerSetup, err := p2pcli.LoadSignerSetup(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to load p2p signer: %w", err)
 	}
 
-	p2pSignerSetup, err := p2p.LoadSignerSetup(ctx)
+	p2pConfig, err := p2pcli.NewConfig(ctx, rollupConfig.BlockTime)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load p2p signer: %v", err)
+		return nil, fmt.Errorf("failed to load p2p config: %w", err)
 	}
 
-	p2pConfig, err := p2p.NewConfig(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load p2p config: %v", err)
-	}
-
-	l1Endpoint, err := NewL1EndpointConfig(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load l1 endpoint info: %v", err)
-	}
+	l1Endpoint := NewL1EndpointConfig(ctx)
 
 	l2Endpoint, err := NewL2EndpointConfig(ctx, log)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load l2 endpoints info: %v", err)
+		return nil, fmt.Errorf("failed to load l2 endpoints info: %w", err)
 	}
+
+	l2SyncEndpoint := NewL2SyncEndpointConfig(ctx)
 
 	cfg := &node.Config{
 		L1:     l1Endpoint,
 		L2:     l2Endpoint,
+		L2Sync: l2SyncEndpoint,
 		Rollup: *rollupConfig,
 		Driver: *driverConfig,
 		RPC: node.RPCConfig{
-			ListenAddr: ctx.GlobalString(flags.RPCListenAddr.Name),
-			ListenPort: ctx.GlobalInt(flags.RPCListenPort.Name),
+			ListenAddr:  ctx.GlobalString(flags.RPCListenAddr.Name),
+			ListenPort:  ctx.GlobalInt(flags.RPCListenPort.Name),
+			EnableAdmin: ctx.GlobalBool(flags.RPCEnableAdmin.Name),
 		},
 		Metrics: node.MetricsConfig{
 			Enabled:    ctx.GlobalBool(flags.MetricsEnabledFlag.Name),
 			ListenAddr: ctx.GlobalString(flags.MetricsAddrFlag.Name),
 			ListenPort: ctx.GlobalInt(flags.MetricsPortFlag.Name),
 		},
-		P2P:       p2pConfig,
-		P2PSigner: p2pSignerSetup,
+		Pprof: oppprof.CLIConfig{
+			Enabled:    ctx.GlobalBool(flags.PprofEnabledFlag.Name),
+			ListenAddr: ctx.GlobalString(flags.PprofAddrFlag.Name),
+			ListenPort: ctx.GlobalInt(flags.PprofPortFlag.Name),
+		},
+		P2P:                 p2pConfig,
+		P2PSigner:           p2pSignerSetup,
+		L1EpochPollInterval: ctx.GlobalDuration(flags.L1EpochPollIntervalFlag.Name),
+		Heartbeat: node.HeartbeatConfig{
+			Enabled: ctx.GlobalBool(flags.HeartbeatEnabledFlag.Name),
+			Moniker: ctx.GlobalString(flags.HeartbeatMonikerFlag.Name),
+			URL:     ctx.GlobalString(flags.HeartbeatURLFlag.Name),
+		},
 	}
 	if err := cfg.Check(); err != nil {
 		return nil, err
@@ -77,11 +93,12 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 	return cfg, nil
 }
 
-func NewL1EndpointConfig(ctx *cli.Context) (*node.L1EndpointConfig, error) {
+func NewL1EndpointConfig(ctx *cli.Context) *node.L1EndpointConfig {
 	return &node.L1EndpointConfig{
 		L1NodeAddr: ctx.GlobalString(flags.L1NodeAddr.Name),
 		L1TrustRPC: ctx.GlobalBool(flags.L1TrustRPC.Name),
-	}, nil
+		L1RPCKind:  sources.RPCProviderKind(strings.ToLower(ctx.GlobalString(flags.L1RPCProviderKind.Name))),
+	}
 }
 
 func NewL2EndpointConfig(ctx *cli.Context, log log.Logger) (*node.L2EndpointConfig, error) {
@@ -101,7 +118,7 @@ func NewL2EndpointConfig(ctx *cli.Context, log log.Logger) (*node.L2EndpointConf
 	} else {
 		log.Warn("Failed to read JWT secret from file, generating a new one now. Configure L2 geth with --authrpc.jwt-secret=" + fmt.Sprintf("%q", fileName))
 		if _, err := io.ReadFull(rand.Reader, secret[:]); err != nil {
-			return nil, fmt.Errorf("failed to generate jwt secret: %v", err)
+			return nil, fmt.Errorf("failed to generate jwt secret: %w", err)
 		}
 		if err := os.WriteFile(fileName, []byte(hexutil.Encode(secret[:])), 0600); err != nil {
 			return nil, err
@@ -114,42 +131,46 @@ func NewL2EndpointConfig(ctx *cli.Context, log log.Logger) (*node.L2EndpointConf
 	}, nil
 }
 
-func NewDriverConfig(ctx *cli.Context) (*driver.Config, error) {
+// NewL2SyncEndpointConfig returns a pointer to a L2SyncEndpointConfig if the
+// flag is set, otherwise nil.
+func NewL2SyncEndpointConfig(ctx *cli.Context) *node.L2SyncEndpointConfig {
+	return &node.L2SyncEndpointConfig{
+		L2NodeAddr: ctx.GlobalString(flags.BackupL2UnsafeSyncRPC.Name),
+	}
+}
+
+func NewDriverConfig(ctx *cli.Context) *driver.Config {
 	return &driver.Config{
 		VerifierConfDepth:  ctx.GlobalUint64(flags.VerifierL1Confs.Name),
 		SequencerConfDepth: ctx.GlobalUint64(flags.SequencerL1Confs.Name),
 		SequencerEnabled:   ctx.GlobalBool(flags.SequencerEnabledFlag.Name),
-	}, nil
+		SequencerStopped:   ctx.GlobalBool(flags.SequencerStoppedFlag.Name),
+	}
 }
 
 func NewRollupConfig(ctx *cli.Context) (*rollup.Config, error) {
+	network := ctx.GlobalString(flags.Network.Name)
+	if network != "" {
+		config, err := chaincfg.GetRollupConfig(network)
+		if err != nil {
+			return nil, err
+		}
+
+		return &config, nil
+	}
+
 	rollupConfigPath := ctx.GlobalString(flags.RollupConfig.Name)
 	file, err := os.Open(rollupConfigPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read rollup config: %v", err)
+		return nil, fmt.Errorf("failed to read rollup config: %w", err)
 	}
 	defer file.Close()
 
 	var rollupConfig rollup.Config
 	if err := json.NewDecoder(file).Decode(&rollupConfig); err != nil {
-		return nil, fmt.Errorf("failed to decode rollup config: %v", err)
+		return nil, fmt.Errorf("failed to decode rollup config: %w", err)
 	}
 	return &rollupConfig, nil
-}
-
-// NewLogConfig creates a log config from the provided flags or environment variables.
-func NewLogConfig(ctx *cli.Context) (node.LogConfig, error) {
-	cfg := node.DefaultLogConfig() // Done to set color based on terminal type
-	cfg.Level = ctx.GlobalString(flags.LogLevelFlag.Name)
-	cfg.Format = ctx.GlobalString(flags.LogFormatFlag.Name)
-	if ctx.IsSet(flags.LogColorFlag.Name) {
-		cfg.Color = ctx.GlobalBool(flags.LogColorFlag.Name)
-	}
-
-	if err := cfg.Check(); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
 }
 
 func NewSnapshotLogger(ctx *cli.Context) (log.Logger, error) {

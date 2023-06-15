@@ -30,8 +30,8 @@ var (
 
 // L2ToL1MessagePasserMetaData contains all meta data concerning the L2ToL1MessagePasser contract.
 var L2ToL1MessagePasserMetaData = &bind.MetaData{
-	ABI: "[{\"inputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"constructor\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"nonce\",\"type\":\"uint256\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"sender\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"target\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint256\",\"name\":\"value\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint256\",\"name\":\"gasLimit\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"bytes\",\"name\":\"data\",\"type\":\"bytes\"}],\"name\":\"WithdrawalInitiated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"}],\"name\":\"WithdrawerBalanceBurnt\",\"type\":\"event\"},{\"inputs\":[],\"name\":\"MAJOR_VERSION\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"MINOR_VERSION\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"PATCH_VERSION\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"burn\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"_target\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"_gasLimit\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"_data\",\"type\":\"bytes\"}],\"name\":\"initiateWithdrawal\",\"outputs\":[],\"stateMutability\":\"payable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"nonce\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"}],\"name\":\"sentMessages\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"stateMutability\":\"payable\",\"type\":\"receive\"}]",
-	Bin: "0x60e060405234801561001057600080fd5b506000608081905260a052600160c05260805160a05160c05161057d61004e600039600060c401526000610174015260006101a8015261057d6000f3fe6080604052600436106100745760003560e01c8063affed0e01161004e578063affed0e014610139578063c2b3e5ac1461014f578063c8b9153114610162578063f786becd1461019657600080fd5b806344df8e701461009d5780636bf2606a146100b257806382e3702d146100f957600080fd5b366100985761009633620186a0604051806020016040528060008152506101ca565b005b600080fd5b3480156100a957600080fd5b50610096610280565b3480156100be57600080fd5b506100e67f000000000000000000000000000000000000000000000000000000000000000081565b6040519081526020015b60405180910390f35b34801561010557600080fd5b50610129610114366004610332565b60006020819052908152604090205460ff1681565b60405190151581526020016100f0565b34801561014557600080fd5b506100e660015481565b61009661015d36600461037a565b6101ca565b34801561016e57600080fd5b506100e67f000000000000000000000000000000000000000000000000000000000000000081565b3480156101a257600080fd5b506100e67f000000000000000000000000000000000000000000000000000000000000000081565b60006101dc60015433863487876102b8565b6000818152602081905260409081902080547fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0016600190811790915554905191925073ffffffffffffffffffffffffffffffffffffffff8616913391907f87bf7b546c8de873abb0db5b579ec131f8d0cf5b14f39933551cf9ced23a61369061026a903490899089906104e9565b60405180910390a4505060018054810190555050565b4761028a816102f7565b60405181907f7967de617a5ac1cc7eba2d6f37570a0135afa950d8bb77cdd35f0d0b4e85a16f90600090a250565b60008686868686866040516020016102d596959493929190610511565b6040516020818303038152906040528051906020012090509695505050505050565b8060405161030490610326565b6040518091039082f0905080158015610321573d6000803e3d6000fd5b505050565b60088061056983390190565b60006020828403121561034457600080fd5b5035919050565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052604160045260246000fd5b60008060006060848603121561038f57600080fd5b833573ffffffffffffffffffffffffffffffffffffffff811681146103b357600080fd5b925060208401359150604084013567ffffffffffffffff808211156103d757600080fd5b818601915086601f8301126103eb57600080fd5b8135818111156103fd576103fd61034b565b604051601f82017fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0908116603f011681019083821181831017156104435761044361034b565b8160405282815289602084870101111561045c57600080fd5b8260208601602083013760006020848301015280955050505050509250925092565b6000815180845260005b818110156104a457602081850181015186830182015201610488565b818111156104b6576000602083870101525b50601f017fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0169290920160200192915050565b838152826020820152606060408201526000610508606083018461047e565b95945050505050565b868152600073ffffffffffffffffffffffffffffffffffffffff808816602084015280871660408401525084606083015283608083015260c060a083015261055c60c083018461047e565b9897505050505050505056fe608060405230fffea164736f6c634300080a000a",
+	ABI: "[{\"inputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"constructor\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"nonce\",\"type\":\"uint256\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"sender\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"target\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"uint256\",\"name\":\"value\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"uint256\",\"name\":\"gasLimit\",\"type\":\"uint256\"},{\"indexed\":false,\"internalType\":\"bytes\",\"name\":\"data\",\"type\":\"bytes\"},{\"indexed\":false,\"internalType\":\"bytes32\",\"name\":\"withdrawalHash\",\"type\":\"bytes32\"}],\"name\":\"MessagePassed\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"}],\"name\":\"WithdrawerBalanceBurnt\",\"type\":\"event\"},{\"inputs\":[],\"name\":\"MESSAGE_VERSION\",\"outputs\":[{\"internalType\":\"uint16\",\"name\":\"\",\"type\":\"uint16\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"burn\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"_target\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"_gasLimit\",\"type\":\"uint256\"},{\"internalType\":\"bytes\",\"name\":\"_data\",\"type\":\"bytes\"}],\"name\":\"initiateWithdrawal\",\"outputs\":[],\"stateMutability\":\"payable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"messageNonce\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"bytes32\",\"name\":\"\",\"type\":\"bytes32\"}],\"name\":\"sentMessages\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"version\",\"outputs\":[{\"internalType\":\"string\",\"name\":\"\",\"type\":\"string\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"stateMutability\":\"payable\",\"type\":\"receive\"}]",
+	Bin: "0x60e060405234801561001057600080fd5b5060016080819052600060a081905260c081905280610a2061004a82396000610403015260006103da015260006103b10152610a206000f3fe6080604052600436106100695760003560e01c806382e3702d1161004357806382e3702d146100f6578063c2b3e5ac14610136578063ecc704281461014957600080fd5b80633f827a5a1461009257806344df8e70146100bf57806354fd4d50146100d457600080fd5b3661008d5761008b33620186a0604051806020016040528060008152506101ae565b005b600080fd5b34801561009e57600080fd5b506100a7600181565b60405161ffff90911681526020015b60405180910390f35b3480156100cb57600080fd5b5061008b610372565b3480156100e057600080fd5b506100e96103aa565b6040516100b6919061068c565b34801561010257600080fd5b506101266101113660046106a6565b60006020819052908152604090205460ff1681565b60405190151581526020016100b6565b61008b6101443660046106ee565b6101ae565b34801561015557600080fd5b506101a06001547dffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff167e010000000000000000000000000000000000000000000000000000000000001790565b6040519081526020016100b6565b60006102446040518060c001604052806102086001547dffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff167e010000000000000000000000000000000000000000000000000000000000001790565b815233602082015273ffffffffffffffffffffffffffffffffffffffff871660408201523460608201526080810186905260a00184905261044d565b600081815260208190526040902080547fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00166001179055905073ffffffffffffffffffffffffffffffffffffffff8416336102df6001547dffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff167e010000000000000000000000000000000000000000000000000000000000001790565b7f02a52367d10742d8032712c1bb8e0144ff1ec5ffda1ed7d70bb05a27449550543487878760405161031494939291906107f2565b60405180910390a45050600180547dffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8082168301167fffff0000000000000000000000000000000000000000000000000000000000009091161790555050565b4761037c8161049a565b60405181907f7967de617a5ac1cc7eba2d6f37570a0135afa950d8bb77cdd35f0d0b4e85a16f90600090a250565b60606103d57f00000000000000000000000000000000000000000000000000000000000000006104c9565b6103fe7f00000000000000000000000000000000000000000000000000000000000000006104c9565b6104277f00000000000000000000000000000000000000000000000000000000000000006104c9565b60405160200161043993929190610822565b604051602081830303815290604052905090565b80516020808301516040808501516060860151608087015160a0880151935160009761047d979096959101610898565b604051602081830303815290604052805190602001209050919050565b806040516104a790610606565b6040518091039082f09050801580156104c4573d6000803e3d6000fd5b505050565b60608160000361050c57505060408051808201909152600181527f3000000000000000000000000000000000000000000000000000000000000000602082015290565b8160005b811561053657806105208161091e565b915061052f9050600a83610985565b9150610510565b60008167ffffffffffffffff811115610551576105516106bf565b6040519080825280601f01601f19166020018201604052801561057b576020820181803683370190505b5090505b84156105fe57610590600183610999565b915061059d600a866109b0565b6105a89060306109c4565b60f81b8183815181106105bd576105bd6109dc565b60200101907effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff1916908160001a9053506105f7600a86610985565b945061057f565b949350505050565b600880610a0c83390190565b60005b8381101561062d578181015183820152602001610615565b8381111561063c576000848401525b50505050565b6000815180845261065a816020860160208601610612565b601f017fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0169290920160200192915050565b60208152600061069f6020830184610642565b9392505050565b6000602082840312156106b857600080fd5b5035919050565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052604160045260246000fd5b60008060006060848603121561070357600080fd5b833573ffffffffffffffffffffffffffffffffffffffff8116811461072757600080fd5b925060208401359150604084013567ffffffffffffffff8082111561074b57600080fd5b818601915086601f83011261075f57600080fd5b813581811115610771576107716106bf565b604051601f82017fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0908116603f011681019083821181831017156107b7576107b76106bf565b816040528281528960208487010111156107d057600080fd5b8260208601602083013760006020848301015280955050505050509250925092565b8481528360208201526080604082015260006108116080830185610642565b905082606083015295945050505050565b60008451610834818460208901610612565b80830190507f2e000000000000000000000000000000000000000000000000000000000000008082528551610870816001850160208a01610612565b6001920191820152835161088b816002840160208801610612565b0160020195945050505050565b868152600073ffffffffffffffffffffffffffffffffffffffff808816602084015280871660408401525084606083015283608083015260c060a08301526108e360c0830184610642565b98975050505050505050565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052601160045260246000fd5b60007fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff820361094f5761094f6108ef565b5060010190565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052601260045260246000fd5b60008261099457610994610956565b500490565b6000828210156109ab576109ab6108ef565b500390565b6000826109bf576109bf610956565b500690565b600082198211156109d7576109d76108ef565b500190565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052603260045260246000fdfe608060405230fffea164736f6c634300080f000a",
 }
 
 // L2ToL1MessagePasserABI is the input ABI used to generate the binding from.
@@ -201,12 +201,43 @@ func (_L2ToL1MessagePasser *L2ToL1MessagePasserTransactorRaw) Transact(opts *bin
 	return _L2ToL1MessagePasser.Contract.contract.Transact(opts, method, params...)
 }
 
-// MAJORVERSION is a free data retrieval call binding the contract method 0xf786becd.
+// MESSAGEVERSION is a free data retrieval call binding the contract method 0x3f827a5a.
 //
-// Solidity: function MAJOR_VERSION() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserCaller) MAJORVERSION(opts *bind.CallOpts) (*big.Int, error) {
+// Solidity: function MESSAGE_VERSION() view returns(uint16)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserCaller) MESSAGEVERSION(opts *bind.CallOpts) (uint16, error) {
 	var out []interface{}
-	err := _L2ToL1MessagePasser.contract.Call(opts, &out, "MAJOR_VERSION")
+	err := _L2ToL1MessagePasser.contract.Call(opts, &out, "MESSAGE_VERSION")
+
+	if err != nil {
+		return *new(uint16), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(uint16)).(*uint16)
+
+	return out0, err
+
+}
+
+// MESSAGEVERSION is a free data retrieval call binding the contract method 0x3f827a5a.
+//
+// Solidity: function MESSAGE_VERSION() view returns(uint16)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserSession) MESSAGEVERSION() (uint16, error) {
+	return _L2ToL1MessagePasser.Contract.MESSAGEVERSION(&_L2ToL1MessagePasser.CallOpts)
+}
+
+// MESSAGEVERSION is a free data retrieval call binding the contract method 0x3f827a5a.
+//
+// Solidity: function MESSAGE_VERSION() view returns(uint16)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserCallerSession) MESSAGEVERSION() (uint16, error) {
+	return _L2ToL1MessagePasser.Contract.MESSAGEVERSION(&_L2ToL1MessagePasser.CallOpts)
+}
+
+// MessageNonce is a free data retrieval call binding the contract method 0xecc70428.
+//
+// Solidity: function messageNonce() view returns(uint256)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserCaller) MessageNonce(opts *bind.CallOpts) (*big.Int, error) {
+	var out []interface{}
+	err := _L2ToL1MessagePasser.contract.Call(opts, &out, "messageNonce")
 
 	if err != nil {
 		return *new(*big.Int), err
@@ -218,111 +249,18 @@ func (_L2ToL1MessagePasser *L2ToL1MessagePasserCaller) MAJORVERSION(opts *bind.C
 
 }
 
-// MAJORVERSION is a free data retrieval call binding the contract method 0xf786becd.
+// MessageNonce is a free data retrieval call binding the contract method 0xecc70428.
 //
-// Solidity: function MAJOR_VERSION() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserSession) MAJORVERSION() (*big.Int, error) {
-	return _L2ToL1MessagePasser.Contract.MAJORVERSION(&_L2ToL1MessagePasser.CallOpts)
+// Solidity: function messageNonce() view returns(uint256)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserSession) MessageNonce() (*big.Int, error) {
+	return _L2ToL1MessagePasser.Contract.MessageNonce(&_L2ToL1MessagePasser.CallOpts)
 }
 
-// MAJORVERSION is a free data retrieval call binding the contract method 0xf786becd.
+// MessageNonce is a free data retrieval call binding the contract method 0xecc70428.
 //
-// Solidity: function MAJOR_VERSION() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserCallerSession) MAJORVERSION() (*big.Int, error) {
-	return _L2ToL1MessagePasser.Contract.MAJORVERSION(&_L2ToL1MessagePasser.CallOpts)
-}
-
-// MINORVERSION is a free data retrieval call binding the contract method 0xc8b91531.
-//
-// Solidity: function MINOR_VERSION() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserCaller) MINORVERSION(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _L2ToL1MessagePasser.contract.Call(opts, &out, "MINOR_VERSION")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// MINORVERSION is a free data retrieval call binding the contract method 0xc8b91531.
-//
-// Solidity: function MINOR_VERSION() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserSession) MINORVERSION() (*big.Int, error) {
-	return _L2ToL1MessagePasser.Contract.MINORVERSION(&_L2ToL1MessagePasser.CallOpts)
-}
-
-// MINORVERSION is a free data retrieval call binding the contract method 0xc8b91531.
-//
-// Solidity: function MINOR_VERSION() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserCallerSession) MINORVERSION() (*big.Int, error) {
-	return _L2ToL1MessagePasser.Contract.MINORVERSION(&_L2ToL1MessagePasser.CallOpts)
-}
-
-// PATCHVERSION is a free data retrieval call binding the contract method 0x6bf2606a.
-//
-// Solidity: function PATCH_VERSION() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserCaller) PATCHVERSION(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _L2ToL1MessagePasser.contract.Call(opts, &out, "PATCH_VERSION")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// PATCHVERSION is a free data retrieval call binding the contract method 0x6bf2606a.
-//
-// Solidity: function PATCH_VERSION() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserSession) PATCHVERSION() (*big.Int, error) {
-	return _L2ToL1MessagePasser.Contract.PATCHVERSION(&_L2ToL1MessagePasser.CallOpts)
-}
-
-// PATCHVERSION is a free data retrieval call binding the contract method 0x6bf2606a.
-//
-// Solidity: function PATCH_VERSION() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserCallerSession) PATCHVERSION() (*big.Int, error) {
-	return _L2ToL1MessagePasser.Contract.PATCHVERSION(&_L2ToL1MessagePasser.CallOpts)
-}
-
-// Nonce is a free data retrieval call binding the contract method 0xaffed0e0.
-//
-// Solidity: function nonce() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserCaller) Nonce(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _L2ToL1MessagePasser.contract.Call(opts, &out, "nonce")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// Nonce is a free data retrieval call binding the contract method 0xaffed0e0.
-//
-// Solidity: function nonce() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserSession) Nonce() (*big.Int, error) {
-	return _L2ToL1MessagePasser.Contract.Nonce(&_L2ToL1MessagePasser.CallOpts)
-}
-
-// Nonce is a free data retrieval call binding the contract method 0xaffed0e0.
-//
-// Solidity: function nonce() view returns(uint256)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserCallerSession) Nonce() (*big.Int, error) {
-	return _L2ToL1MessagePasser.Contract.Nonce(&_L2ToL1MessagePasser.CallOpts)
+// Solidity: function messageNonce() view returns(uint256)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserCallerSession) MessageNonce() (*big.Int, error) {
+	return _L2ToL1MessagePasser.Contract.MessageNonce(&_L2ToL1MessagePasser.CallOpts)
 }
 
 // SentMessages is a free data retrieval call binding the contract method 0x82e3702d.
@@ -354,6 +292,37 @@ func (_L2ToL1MessagePasser *L2ToL1MessagePasserSession) SentMessages(arg0 [32]by
 // Solidity: function sentMessages(bytes32 ) view returns(bool)
 func (_L2ToL1MessagePasser *L2ToL1MessagePasserCallerSession) SentMessages(arg0 [32]byte) (bool, error) {
 	return _L2ToL1MessagePasser.Contract.SentMessages(&_L2ToL1MessagePasser.CallOpts, arg0)
+}
+
+// Version is a free data retrieval call binding the contract method 0x54fd4d50.
+//
+// Solidity: function version() view returns(string)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserCaller) Version(opts *bind.CallOpts) (string, error) {
+	var out []interface{}
+	err := _L2ToL1MessagePasser.contract.Call(opts, &out, "version")
+
+	if err != nil {
+		return *new(string), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(string)).(*string)
+
+	return out0, err
+
+}
+
+// Version is a free data retrieval call binding the contract method 0x54fd4d50.
+//
+// Solidity: function version() view returns(string)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserSession) Version() (string, error) {
+	return _L2ToL1MessagePasser.Contract.Version(&_L2ToL1MessagePasser.CallOpts)
+}
+
+// Version is a free data retrieval call binding the contract method 0x54fd4d50.
+//
+// Solidity: function version() view returns(string)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserCallerSession) Version() (string, error) {
+	return _L2ToL1MessagePasser.Contract.Version(&_L2ToL1MessagePasser.CallOpts)
 }
 
 // Burn is a paid mutator transaction binding the contract method 0x44df8e70.
@@ -419,9 +388,9 @@ func (_L2ToL1MessagePasser *L2ToL1MessagePasserTransactorSession) Receive() (*ty
 	return _L2ToL1MessagePasser.Contract.Receive(&_L2ToL1MessagePasser.TransactOpts)
 }
 
-// L2ToL1MessagePasserWithdrawalInitiatedIterator is returned from FilterWithdrawalInitiated and is used to iterate over the raw logs and unpacked data for WithdrawalInitiated events raised by the L2ToL1MessagePasser contract.
-type L2ToL1MessagePasserWithdrawalInitiatedIterator struct {
-	Event *L2ToL1MessagePasserWithdrawalInitiated // Event containing the contract specifics and raw log
+// L2ToL1MessagePasserMessagePassedIterator is returned from FilterMessagePassed and is used to iterate over the raw logs and unpacked data for MessagePassed events raised by the L2ToL1MessagePasser contract.
+type L2ToL1MessagePasserMessagePassedIterator struct {
+	Event *L2ToL1MessagePasserMessagePassed // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -435,7 +404,7 @@ type L2ToL1MessagePasserWithdrawalInitiatedIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *L2ToL1MessagePasserWithdrawalInitiatedIterator) Next() bool {
+func (it *L2ToL1MessagePasserMessagePassedIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -444,7 +413,7 @@ func (it *L2ToL1MessagePasserWithdrawalInitiatedIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(L2ToL1MessagePasserWithdrawalInitiated)
+			it.Event = new(L2ToL1MessagePasserMessagePassed)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -459,7 +428,7 @@ func (it *L2ToL1MessagePasserWithdrawalInitiatedIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(L2ToL1MessagePasserWithdrawalInitiated)
+		it.Event = new(L2ToL1MessagePasserMessagePassed)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -475,32 +444,33 @@ func (it *L2ToL1MessagePasserWithdrawalInitiatedIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *L2ToL1MessagePasserWithdrawalInitiatedIterator) Error() error {
+func (it *L2ToL1MessagePasserMessagePassedIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *L2ToL1MessagePasserWithdrawalInitiatedIterator) Close() error {
+func (it *L2ToL1MessagePasserMessagePassedIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// L2ToL1MessagePasserWithdrawalInitiated represents a WithdrawalInitiated event raised by the L2ToL1MessagePasser contract.
-type L2ToL1MessagePasserWithdrawalInitiated struct {
-	Nonce    *big.Int
-	Sender   common.Address
-	Target   common.Address
-	Value    *big.Int
-	GasLimit *big.Int
-	Data     []byte
-	Raw      types.Log // Blockchain specific contextual infos
+// L2ToL1MessagePasserMessagePassed represents a MessagePassed event raised by the L2ToL1MessagePasser contract.
+type L2ToL1MessagePasserMessagePassed struct {
+	Nonce          *big.Int
+	Sender         common.Address
+	Target         common.Address
+	Value          *big.Int
+	GasLimit       *big.Int
+	Data           []byte
+	WithdrawalHash [32]byte
+	Raw            types.Log // Blockchain specific contextual infos
 }
 
-// FilterWithdrawalInitiated is a free log retrieval operation binding the contract event 0x87bf7b546c8de873abb0db5b579ec131f8d0cf5b14f39933551cf9ced23a6136.
+// FilterMessagePassed is a free log retrieval operation binding the contract event 0x02a52367d10742d8032712c1bb8e0144ff1ec5ffda1ed7d70bb05a2744955054.
 //
-// Solidity: event WithdrawalInitiated(uint256 indexed nonce, address indexed sender, address indexed target, uint256 value, uint256 gasLimit, bytes data)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserFilterer) FilterWithdrawalInitiated(opts *bind.FilterOpts, nonce []*big.Int, sender []common.Address, target []common.Address) (*L2ToL1MessagePasserWithdrawalInitiatedIterator, error) {
+// Solidity: event MessagePassed(uint256 indexed nonce, address indexed sender, address indexed target, uint256 value, uint256 gasLimit, bytes data, bytes32 withdrawalHash)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserFilterer) FilterMessagePassed(opts *bind.FilterOpts, nonce []*big.Int, sender []common.Address, target []common.Address) (*L2ToL1MessagePasserMessagePassedIterator, error) {
 
 	var nonceRule []interface{}
 	for _, nonceItem := range nonce {
@@ -515,17 +485,17 @@ func (_L2ToL1MessagePasser *L2ToL1MessagePasserFilterer) FilterWithdrawalInitiat
 		targetRule = append(targetRule, targetItem)
 	}
 
-	logs, sub, err := _L2ToL1MessagePasser.contract.FilterLogs(opts, "WithdrawalInitiated", nonceRule, senderRule, targetRule)
+	logs, sub, err := _L2ToL1MessagePasser.contract.FilterLogs(opts, "MessagePassed", nonceRule, senderRule, targetRule)
 	if err != nil {
 		return nil, err
 	}
-	return &L2ToL1MessagePasserWithdrawalInitiatedIterator{contract: _L2ToL1MessagePasser.contract, event: "WithdrawalInitiated", logs: logs, sub: sub}, nil
+	return &L2ToL1MessagePasserMessagePassedIterator{contract: _L2ToL1MessagePasser.contract, event: "MessagePassed", logs: logs, sub: sub}, nil
 }
 
-// WatchWithdrawalInitiated is a free log subscription operation binding the contract event 0x87bf7b546c8de873abb0db5b579ec131f8d0cf5b14f39933551cf9ced23a6136.
+// WatchMessagePassed is a free log subscription operation binding the contract event 0x02a52367d10742d8032712c1bb8e0144ff1ec5ffda1ed7d70bb05a2744955054.
 //
-// Solidity: event WithdrawalInitiated(uint256 indexed nonce, address indexed sender, address indexed target, uint256 value, uint256 gasLimit, bytes data)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserFilterer) WatchWithdrawalInitiated(opts *bind.WatchOpts, sink chan<- *L2ToL1MessagePasserWithdrawalInitiated, nonce []*big.Int, sender []common.Address, target []common.Address) (event.Subscription, error) {
+// Solidity: event MessagePassed(uint256 indexed nonce, address indexed sender, address indexed target, uint256 value, uint256 gasLimit, bytes data, bytes32 withdrawalHash)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserFilterer) WatchMessagePassed(opts *bind.WatchOpts, sink chan<- *L2ToL1MessagePasserMessagePassed, nonce []*big.Int, sender []common.Address, target []common.Address) (event.Subscription, error) {
 
 	var nonceRule []interface{}
 	for _, nonceItem := range nonce {
@@ -540,7 +510,7 @@ func (_L2ToL1MessagePasser *L2ToL1MessagePasserFilterer) WatchWithdrawalInitiate
 		targetRule = append(targetRule, targetItem)
 	}
 
-	logs, sub, err := _L2ToL1MessagePasser.contract.WatchLogs(opts, "WithdrawalInitiated", nonceRule, senderRule, targetRule)
+	logs, sub, err := _L2ToL1MessagePasser.contract.WatchLogs(opts, "MessagePassed", nonceRule, senderRule, targetRule)
 	if err != nil {
 		return nil, err
 	}
@@ -550,8 +520,8 @@ func (_L2ToL1MessagePasser *L2ToL1MessagePasserFilterer) WatchWithdrawalInitiate
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(L2ToL1MessagePasserWithdrawalInitiated)
-				if err := _L2ToL1MessagePasser.contract.UnpackLog(event, "WithdrawalInitiated", log); err != nil {
+				event := new(L2ToL1MessagePasserMessagePassed)
+				if err := _L2ToL1MessagePasser.contract.UnpackLog(event, "MessagePassed", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -572,12 +542,12 @@ func (_L2ToL1MessagePasser *L2ToL1MessagePasserFilterer) WatchWithdrawalInitiate
 	}), nil
 }
 
-// ParseWithdrawalInitiated is a log parse operation binding the contract event 0x87bf7b546c8de873abb0db5b579ec131f8d0cf5b14f39933551cf9ced23a6136.
+// ParseMessagePassed is a log parse operation binding the contract event 0x02a52367d10742d8032712c1bb8e0144ff1ec5ffda1ed7d70bb05a2744955054.
 //
-// Solidity: event WithdrawalInitiated(uint256 indexed nonce, address indexed sender, address indexed target, uint256 value, uint256 gasLimit, bytes data)
-func (_L2ToL1MessagePasser *L2ToL1MessagePasserFilterer) ParseWithdrawalInitiated(log types.Log) (*L2ToL1MessagePasserWithdrawalInitiated, error) {
-	event := new(L2ToL1MessagePasserWithdrawalInitiated)
-	if err := _L2ToL1MessagePasser.contract.UnpackLog(event, "WithdrawalInitiated", log); err != nil {
+// Solidity: event MessagePassed(uint256 indexed nonce, address indexed sender, address indexed target, uint256 value, uint256 gasLimit, bytes data, bytes32 withdrawalHash)
+func (_L2ToL1MessagePasser *L2ToL1MessagePasserFilterer) ParseMessagePassed(log types.Log) (*L2ToL1MessagePasserMessagePassed, error) {
+	event := new(L2ToL1MessagePasserMessagePassed)
+	if err := _L2ToL1MessagePasser.contract.UnpackLog(event, "MessagePassed", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log

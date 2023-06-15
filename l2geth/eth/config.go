@@ -57,7 +57,9 @@ var DefaultConfig = Config{
 		GasPrice: big.NewInt(params.GWei),
 		Recommit: 3 * time.Second,
 	},
-	TxPool: core.DefaultTxPoolConfig,
+	TxPool:        core.DefaultTxPoolConfig,
+	RPCGasCap:     new(big.Int).SetUint64(25_000_000),
+	RPCEVMTimeout: 5 * time.Second,
 	GPO: gasprice.Config{
 		Blocks:     20,
 		Percentile: 60,
@@ -168,6 +170,9 @@ type Config struct {
 
 	// RPCGasCap is the global gas cap for eth-call variants.
 	RPCGasCap *big.Int `toml:",omitempty"`
+
+	// RPCEVMTimeout is the global timeout for eth-call. (0=infinite)
+	RPCEVMTimeout time.Duration
 
 	// Checkpoint is a hardcoded checkpoint which can be nil.
 	Checkpoint *params.TrustedCheckpoint `toml:",omitempty"`

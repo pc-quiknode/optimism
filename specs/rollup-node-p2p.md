@@ -29,35 +29,34 @@ and are adopted by several other blockchains, most notably the [L1 consensus lay
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 **Table of Contents**
 
-- [Rollup-node P2P interface](#rollup-node-p2p-interface)
-  - [P2P configuration](#p2p-configuration)
-    - [Identification](#identification)
-    - [Discv5](#discv5)
-      - [Structure](#structure)
-    - [LibP2P](#libp2p)
-      - [Transport](#transport)
-      - [Dialing](#dialing)
-      - [NAT](#nat)
-      - [Peer management](#peer-management)
-      - [Transport security](#transport-security)
-      - [Protocol negotiation](#protocol-negotiation)
-      - [Identify](#identify)
-      - [Ping](#ping)
-      - [Multiplexing](#multiplexing)
-      - [GossipSub](#gossipsub)
-        - [Content-based message identification](#content-based-message-identification)
-        - [Message compression and limits](#message-compression-and-limits)
-        - [Message ID computation](#message-id-computation)
-      - [Heartbeat and parameters](#heartbeat-and-parameters)
-      - [Topic configuration](#topic-configuration)
-      - [Topic validation](#topic-validation)
-  - [Gossip Topics](#gossip-topics)
-    - [`blocks`](#blocks)
-      - [Block encoding](#block-encoding)
-      - [Block signatures](#block-signatures)
-      - [Block validation](#block-validation)
-        - [Block processing](#block-processing)
-        - [Block topic scoring parameters](#block-topic-scoring-parameters)
+- [P2P configuration](#p2p-configuration)
+  - [Identification](#identification)
+  - [Discv5](#discv5)
+    - [Structure](#structure)
+  - [LibP2P](#libp2p)
+    - [Transport](#transport)
+    - [Dialing](#dialing)
+    - [NAT](#nat)
+    - [Peer management](#peer-management)
+    - [Transport security](#transport-security)
+    - [Protocol negotiation](#protocol-negotiation)
+    - [Identify](#identify)
+    - [Ping](#ping)
+    - [Multiplexing](#multiplexing)
+    - [GossipSub](#gossipsub)
+      - [Content-based message identification](#content-based-message-identification)
+      - [Message compression and limits](#message-compression-and-limits)
+      - [Message ID computation](#message-id-computation)
+    - [Heartbeat and parameters](#heartbeat-and-parameters)
+    - [Topic configuration](#topic-configuration)
+    - [Topic validation](#topic-validation)
+- [Gossip Topics](#gossip-topics)
+  - [`blocks`](#blocks)
+    - [Block encoding](#block-encoding)
+    - [Block signatures](#block-signatures)
+    - [Block validation](#block-validation)
+      - [Block processing](#block-processing)
+      - [Block topic scoring parameters](#block-topic-scoring-parameters)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -85,9 +84,9 @@ The Ethereum Node Record (ENR) for an Optimism rollup node must contain the foll
 - An IPv4 address (`ip` field) and/or IPv6 address (`ip6` field).
 - A TCP port (`tcp` field) representing the local libp2p listening port.
 - A UDP port (`udp` field) representing the local discv5 listening port.
-- An Optimism (`optimism` field) L2 network identifier
+- An OpStack (`opstack` field) L2 network identifier
 
-The `optimism` value is encoded as a single RLP `bytes` value, the concatenation of:
+The `opstack` value is encoded as a single RLP `bytes` value, the concatenation of:
 
 - chain ID (`unsigned varint`)
 - fork ID (`unsigned varint`)
@@ -102,7 +101,7 @@ The discovery process in Optimism is a pipeline of node records:
 2. Pull additional records with searches to random Node IDs if necessary
    (e.g. iterate [`RandomNodes()`][discv5-random-nodes] in Go implementation)
 3. Pull records from the DiscV5 module when looking for peers
-4. Check if the record contains the `optimism` entry, verify it matches the chain ID and current or future fork number
+4. Check if the record contains the `opstack` entry, verify it matches the chain ID and current or future fork number
 5. If not already connected, and not recently disconnected or put on deny-list, attempt to dial.
 
 ### LibP2P
@@ -172,7 +171,7 @@ For async communication over different channels over the same connection, multip
 
 #### GossipSub
 
-[GossipSub 1.1](gossipsub) (`/meshsub/1.1.0`, i.e. with peer-scoring extension) is a pubsub protocol for mesh-networks,
+[GossipSub 1.1][gossipsub] (`/meshsub/1.1.0`, i.e. with peer-scoring extension) is a pubsub protocol for mesh-networks,
 deployed on L1 consensus (Eth2) and other protocols such as Filecoin, offering lots of customization options.
 
 ##### Content-based message identification
@@ -212,7 +211,7 @@ GossipSub [parameters][gossip-parameters]:
 - `fanout_ttl` (ttl for fanout maps for topics we are not subscribed to but have published to, in seconds): 24
 - `mcache_len` (number of windows to retain full messages in cache for `IWANT` responses): 12
 - `mcache_gossip` (number of windows to gossip about): 3
-- `seen_ttl` (number of heartbeat intervals to retain message IDs): 80 (= 40 seconds)
+- `seen_ttl` (number of heartbeat intervals to retain message IDs): 130 (= 65 seconds)
 
 Notable differences from L1 consensus (Eth2):
 
